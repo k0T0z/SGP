@@ -28,4 +28,3 @@
 [submodule "externals/shader-gen"]
 	path = externals/shader-gen
 	url = https://github.com/k0T0z/shader-gen.git
-	branch = gen-python-api
