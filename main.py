@@ -55,7 +55,8 @@ if _MODULE_DIR.is_dir():
     sys.path.insert(0, str(_MODULE_DIR))
 
 import shader_gen_py  # noqa: E402
-
+import renderer
+import argparse
 
 def build_sample_graph() -> shader_gen_py.RawVisualShaderGraph:
     """The graph shader-gen uses in its own generator regression test.
@@ -89,6 +90,12 @@ def build_sample_graph() -> shader_gen_py.RawVisualShaderGraph:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="SGP - Shader Generation Problem")
+    parser.add_argument("--preview", action="store_true", help="Run the shader preview")
+    parser.add_argument("--target", type=str, help="Path to the target image for comparison")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode")
+    args = parser.parse_args()
+
     graph = build_sample_graph()
 
     status, glsl = shader_gen_py.generate_shader(graph)
@@ -96,7 +103,12 @@ def main() -> int:
         print("generate_shader failed", file=sys.stderr)
         return 1
 
-    print(glsl)
+    if args.preview:
+        print("Starting preview...")
+        renderer.run_preview(glsl, target_image_path=args.target, headless=args.headless)
+    else:
+        print(glsl)
+        
     return 0
 
 
