@@ -27,13 +27,10 @@
 
 #include <string>
 #include <tuple>
-#include <utility>
-#include <vector>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "generator/raw_visual_shader_graph.hpp"
 #include "generator/visual_shader_generator.hpp"
 
 namespace py = pybind11;
@@ -43,7 +40,7 @@ namespace {
 // `shader-gen`'s generate_shader reports its result through a `std::string&` out-parameter,
 // which has no Python equivalent since strings are immutable. Return the status and the
 // generated source together instead.
-std::tuple<bool, std::string> generate_shader(const RawVisualShaderGraph& graph) {
+std::tuple<bool, std::string> generate_shader(const std::string& graph) {
   std::string code;
   const bool status = shadergen_visual_shader_generator::generate_shader(graph, code);
   return {status, code};
@@ -54,22 +51,10 @@ std::tuple<bool, std::string> generate_shader(const RawVisualShaderGraph& graph)
 PYBIND11_MODULE(shader_gen_py, m) {
   m.doc() = "Python bindings for shader-gen's Qt-free GLSL generator.";
 
-  // The STL members are exposed read-only on purpose: pybind11 hands out copies of C++
-  // containers to Python, so `graph.adj_matrix[7][0] = ...` would silently edit a throwaway
-  // list. Build the graph in the constructor instead.
-  py::class_<RawVisualShaderGraph>(m, "RawVisualShaderGraph")
-      .def(py::init([](std::vector<std::string> headers, std::vector<std::vector<std::string>> adj_matrix) {
-             RawVisualShaderGraph graph;
-             graph.headers = std::move(headers);
-             graph.adj_matrix = std::move(adj_matrix);
-             return graph;
-           }),
-           py::arg("headers"), py::arg("adj_matrix"),
-           "Per-node headers formatted as 'entity_type;node_id;oneof_field_number;param=value;...' "
-           "plus adj_matrix[from][to] = '<from_port>,<to_port>' for every connection.")
-      .def_readonly("headers", &RawVisualShaderGraph::headers)
-      .def_readonly("adj_matrix", &RawVisualShaderGraph::adj_matrix);
-
+  // `graph` is shader-gen's encoded raw graph: a comma separated list of entities where every
+  // entity is semicolon separated.
+  //   - Nodes:       "0;<node_id>;<oneof_value_field_number>;<field_number>=<value>;..."
+  //   - Connections: "1;<connection_id>;<from_node_id>;<from_port_index>;<to_node_id>;<to_port_index>"
   m.def("generate_shader", &generate_shader, py::arg("graph"),
         "Generate the full GLSL source for `graph`.\n\n"
         "Returns (status, glsl): `status` mirrors the C++ return value and `glsl` is the code "
