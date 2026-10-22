@@ -49,16 +49,13 @@ once it is pushed and the submodule pointer is bumped, the flag can be dropped.
 ```python
 import shader_gen_py
 
-graph = shader_gen_py.RawVisualShaderGraph(headers, adj_matrix)
+graph = "0;0;3,0;1;2;1=2,..."  # encoded raw graph, see below
 status, glsl = shader_gen_py.generate_shader(graph)
 ```
 
-- `headers[i]` — `"<entity_type>;<node_id>;<oneof_field_number>;<param>=<value>;..."`, where
-  `entity_type` is `0` for a node (`headers` is indexed by node id).
-- `adj_matrix[from][to]` — `"<from_port>,<to_port>"`; `""` when there is no connection.
-  Multiple connections between the same pair go in one cell separated by `;`.
-- The two arguments are copied into C++ by the constructor, so both attributes are
-  `readonly` — they cannot be mutated in place from Python. Build a new object instead.
+- `graph` — a comma separated list of entities where every entity is semicolon separated:
+  - Nodes: `"0;<node_id>;<oneof_value_field_number>;<field_number>=<value>;..."`
+  - Connections: `"1;<connection_id>;<from_node_id>;<from_port_index>;<to_node_id>;<to_port_index>"`
 - `generate_shader` returns `(status, glsl)`: shader-gen reports its result through a
   `std::string&` out-parameter, which has no Python equivalent, so `status` mirrors the C++
   return value and `glsl` is the buffer.

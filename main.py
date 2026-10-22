@@ -58,35 +58,30 @@ import shader_gen_py  # noqa: E402
 import renderer
 import argparse
 
-def build_sample_graph() -> shader_gen_py.RawVisualShaderGraph:
+def build_sample_graph() -> str:
     """The graph shader-gen uses in its own generator regression test.
 
-    A header is 'entity_type;node_id;oneof_field_number;param=value;...' with entity_type 0
-    meaning a node. The adjacency matrix cell [from][to] is '<from_port>,<to_port>'.
+    The graph is a comma separated list of entities where every entity is semicolon separated:
+      - Nodes:       "0;<node_id>;<oneof_value_field_number>;<field_number>=<value>;..."
+      - Connections: "1;<connection_id>;<from_node_id>;<from_port_index>;<to_node_id>;<to_port_index>"
     """
-    headers = [
-        "0;0;3",                # Output          (oneof 3)
-        "0;1;2;1=2",            # Input TIME      (oneof 2,  type 2)
-        "0;2;16;1=1",           # FloatFunc SIN   (oneof 16, func 1)
-        "0;3;12;1=4",           # FloatOp DIV     (oneof 12, op 4)
-        "0;4;2;1=1",            # Input UV        (oneof 2,  type 1)
-        "0;5;20;1=100.000000",  # ValueNoise      (oneof 20, scale 100)
-        "0;6;12;1=2",           # FloatOp SUB     (oneof 12, op 2)
-        "0;7;16;1=16",          # FloatFunc ROUND (oneof 16, func 16)
-    ]
-
-    node_count = len(headers)
-    adj_matrix = [["" for _ in range(node_count)] for _ in range(node_count)]
-
-    adj_matrix[1][2] = "0,0"  # time        -> sin
-    adj_matrix[2][3] = "0,0"  # sin         -> div
-    adj_matrix[3][6] = "0,1"  # div         -> sub (input 1)
-    adj_matrix[4][5] = "0,0"  # uv          -> value_noise
-    adj_matrix[5][6] = "0,0"  # value_noise -> sub (input 0)
-    adj_matrix[6][7] = "0,0"  # sub         -> round
-    adj_matrix[7][0] = "0,0"  # round       -> output
-
-    return shader_gen_py.RawVisualShaderGraph(headers, adj_matrix)
+    return (
+        "0;0;3,"                # Output          (oneof 3)
+        "0;1;2;1=2,"            # Input TIME      (oneof 2,  type 2)
+        "0;2;16;1=1,"           # FloatFunc SIN   (oneof 16, func 1)
+        "0;3;12;1=4,"           # FloatOp DIV     (oneof 12, op 4)
+        "0;4;2;1=1,"            # Input UV        (oneof 2,  type 1)
+        "0;5;20;1=100.000000,"  # ValueNoise      (oneof 20, scale 100)
+        "0;6;12;1=2,"           # FloatOp SUB     (oneof 12, op 2)
+        "0;7;16;1=16,"          # FloatFunc ROUND (oneof 16, func 16)
+        "1;0;1;0;2;0,"          # time        -> sin
+        "1;1;2;0;3;0,"          # sin         -> div
+        "1;2;3;0;6;1,"          # div         -> sub (input 1)
+        "1;3;4;0;5;0,"          # uv          -> value_noise
+        "1;4;5;0;6;0,"          # value_noise -> sub (input 0)
+        "1;5;6;0;7;0,"          # sub         -> round
+        "1;6;7;0;0;0"           # round       -> output
+    )
 
 
 def main() -> int:
