@@ -27,13 +27,13 @@
 
 #include <string>
 #include <tuple>
-#include <utility>
+#include <variant>
 #include <vector>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "generator/raw_visual_shader_graph.hpp"
+#include "ai-agent/utils/utils.hpp"
 #include "generator/visual_shader_generator.hpp"
 
 namespace py = pybind11;
@@ -43,10 +43,29 @@ namespace {
 // `shader-gen`'s generate_shader reports its result through a `std::string&` out-parameter,
 // which has no Python equivalent since strings are immutable. Return the status and the
 // generated source together instead.
-std::tuple<bool, std::string> generate_shader(const RawVisualShaderGraph& graph) {
+std::tuple<bool, std::string> generate_shader(const std::string& graph) {
   std::string code;
   const bool status = shadergen_visual_shader_generator::generate_shader(graph, code);
   return {status, code};
+}
+
+// `get_range_for_continuous_field` reports "this (node type, field) pair has no range" as
+// `(0, 0)`, which no declared range uses, and returns the bounds as `std::variant<int, float>`
+// because shader-gen mixes integer and floating point ranges.
+double as_double(const ai_agent_utils::ContinuousRangeVariant& bound) {
+  return std::visit([](const auto& value) { return static_cast<double>(value); }, bound);
+}
+
+py::object get_continuous_range(const int node_type, const int field_number) {
+  const auto range = ai_agent_utils::get_range_for_continuous_field(node_type, field_number);
+  const double lower = as_double(range.first);
+  const double upper = as_double(range.second);
+  if (lower == 0.0 && upper == 0.0) return py::none();
+  return py::make_tuple(lower, upper);
+}
+
+std::vector<int> get_discrete_range(const int node_type, const int field_number) {
+  return ai_agent_utils::get_range_for_discrete_field(node_type, field_number);
 }
 
 }  // namespace
@@ -54,22 +73,10 @@ std::tuple<bool, std::string> generate_shader(const RawVisualShaderGraph& graph)
 PYBIND11_MODULE(shader_gen_py, m) {
   m.doc() = "Python bindings for shader-gen's Qt-free GLSL generator.";
 
-  // The STL members are exposed read-only on purpose: pybind11 hands out copies of C++
-  // containers to Python, so `graph.adj_matrix[7][0] = ...` would silently edit a throwaway
-  // list. Build the graph in the constructor instead.
-  py::class_<RawVisualShaderGraph>(m, "RawVisualShaderGraph")
-      .def(py::init([](std::vector<std::string> headers, std::vector<std::vector<std::string>> adj_matrix) {
-             RawVisualShaderGraph graph;
-             graph.headers = std::move(headers);
-             graph.adj_matrix = std::move(adj_matrix);
-             return graph;
-           }),
-           py::arg("headers"), py::arg("adj_matrix"),
-           "Per-node headers formatted as 'entity_type;node_id;oneof_field_number;param=value;...' "
-           "plus adj_matrix[from][to] = '<from_port>,<to_port>' for every connection.")
-      .def_readonly("headers", &RawVisualShaderGraph::headers)
-      .def_readonly("adj_matrix", &RawVisualShaderGraph::adj_matrix);
-
+  // `graph` is shader-gen's encoded raw graph: a comma separated list of entities where every
+  // entity is semicolon separated.
+  //   - Nodes:       "0;<node_id>;<oneof_value_field_number>;<field_number>=<value>;..."
+  //   - Connections: "1;<connection_id>;<from_node_id>;<from_port_index>;<to_node_id>;<to_port_index>"
   m.def("generate_shader", &generate_shader, py::arg("graph"),
         "Generate the full GLSL source for `graph`.\n\n"
         "Returns (status, glsl): `status` mirrors the C++ return value and `glsl` is the code "
@@ -77,4 +84,14 @@ PYBIND11_MODULE(shader_gen_py, m) {
 
   m.def("generate_preview_shader", &shadergen_visual_shader_generator::generate_preview_shader, py::arg("graph"),
         py::arg("node_id"), py::arg("port"), "Generate GLSL that renders a single node's output port.");
+
+  // The mutation ranges live in shader-gen (`ai-agent/utils/utils.hpp`); re-exporting them keeps
+  // the search ranges in step with the generator instead of duplicated on the Python side.
+  m.def("get_continuous_range", &get_continuous_range, py::arg("node_type"), py::arg("field_number"),
+        "shader-gen's mutation range for a continuous field, as (lower, upper).\n\n"
+        "Returns None when shader-gen declares no range for the (node type, field number) pair.");
+  m.def("get_discrete_range", &get_discrete_range, py::arg("node_type"), py::arg("field_number"),
+        "shader-gen's mutation values for a discrete field.\n\n"
+        "Returns an empty list when shader-gen declares no values for the (node type, field "
+        "number) pair.");
 }

@@ -232,3 +232,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+*.png
+
+# Run artifacts written by ga.py (best_output.png and fitness.png are already covered by *.png).
+best_graph.txt
+best_shader.glsl
