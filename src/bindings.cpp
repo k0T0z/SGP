@@ -27,10 +27,13 @@
 
 #include <string>
 #include <tuple>
+#include <variant>
+#include <vector>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ai-agent/utils/utils.hpp"
 #include "generator/visual_shader_generator.hpp"
 
 namespace py = pybind11;
@@ -44,6 +47,25 @@ std::tuple<bool, std::string> generate_shader(const std::string& graph) {
   std::string code;
   const bool status = shadergen_visual_shader_generator::generate_shader(graph, code);
   return {status, code};
+}
+
+// `get_range_for_continuous_field` reports "this (node type, field) pair has no range" as
+// `(0, 0)`, which no declared range uses, and returns the bounds as `std::variant<int, float>`
+// because shader-gen mixes integer and floating point ranges.
+double as_double(const ai_agent_utils::ContinuousRangeVariant& bound) {
+  return std::visit([](const auto& value) { return static_cast<double>(value); }, bound);
+}
+
+py::object get_continuous_range(const int node_type, const int field_number) {
+  const auto range = ai_agent_utils::get_range_for_continuous_field(node_type, field_number);
+  const double lower = as_double(range.first);
+  const double upper = as_double(range.second);
+  if (lower == 0.0 && upper == 0.0) return py::none();
+  return py::make_tuple(lower, upper);
+}
+
+std::vector<int> get_discrete_range(const int node_type, const int field_number) {
+  return ai_agent_utils::get_range_for_discrete_field(node_type, field_number);
 }
 
 }  // namespace
@@ -62,4 +84,14 @@ PYBIND11_MODULE(shader_gen_py, m) {
 
   m.def("generate_preview_shader", &shadergen_visual_shader_generator::generate_preview_shader, py::arg("graph"),
         py::arg("node_id"), py::arg("port"), "Generate GLSL that renders a single node's output port.");
+
+  // The mutation ranges live in shader-gen (`ai-agent/utils/utils.hpp`); re-exporting them keeps
+  // the search ranges in step with the generator instead of duplicated on the Python side.
+  m.def("get_continuous_range", &get_continuous_range, py::arg("node_type"), py::arg("field_number"),
+        "shader-gen's mutation range for a continuous field, as (lower, upper).\n\n"
+        "Returns None when shader-gen declares no range for the (node type, field number) pair.");
+  m.def("get_discrete_range", &get_discrete_range, py::arg("node_type"), py::arg("field_number"),
+        "shader-gen's mutation values for a discrete field.\n\n"
+        "Returns an empty list when shader-gen declares no values for the (node type, field "
+        "number) pair.");
 }

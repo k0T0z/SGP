@@ -5,6 +5,38 @@ from PIL import Image
 import os
 import sys
 
+# Shared by the preview window and the offscreen renderer the genetic algorithm samples with.
+VERT_SHADER = """
+    #version 330
+    in vec2 in_vert;
+    in vec2 in_texcoord;
+    out vec2 FragCoord;
+    void main() {
+        gl_Position = vec4(in_vert, 0.0, 1.0);
+        FragCoord = in_texcoord;
+    }
+"""
+
+QUAD_VERTICES = np.array([
+    # x, y, u, v
+    -1.0,  1.0, 0.0, 1.0,
+    -1.0, -1.0, 0.0, 0.0,
+     1.0,  1.0, 1.0, 1.0,
+     1.0, -1.0, 1.0, 0.0,
+], dtype='f4')
+
+
+def _vertex_array(ctx, program, vbo):
+    """Bind the quad, skipping attributes the driver optimised away.
+
+    A generated shader that never reads FragCoord lets the compiler drop ``in_texcoord``, and
+    moderngl raises when asked to bind an attribute the program does not have.
+    """
+    if program.get('in_texcoord', None) is not None:
+        return ctx.vertex_array(program, [(vbo, '2f 2f', 'in_vert', 'in_texcoord')])
+    return ctx.vertex_array(program, [(vbo, '2f', 'in_vert')])
+
+
 class ShaderRenderer(mglw.WindowConfig):
     gl_version = (3, 3)
     title = "SGP - Shader Preview (Isolated Widgets)"
@@ -17,37 +49,24 @@ class ShaderRenderer(mglw.WindowConfig):
     initial_target = None
 
     def __init__(self, **kwargs):
-        # When running headless, we might not have a window object
+        # Runs with a window (moderngl_window supplies wnd/ctx) or without one, in which case
+        # the caller passes a standalone ctx and an ``offscreen_size`` to read pixels back from.
         self.wnd = kwargs.get('wnd')
         self.ctx = kwargs.get('ctx')
-        
+        self.offscreen_size = kwargs.get('offscreen_size')
+
         if self.wnd:
             super().__init__(**kwargs)
         
         if not self.ctx and self.wnd:
             self.ctx = self.wnd.ctx
             
-        self.quad_vertices = np.array([
-            # x, y, u, v
-            -1.0,  1.0, 0.0, 1.0,
-            -1.0, -1.0, 0.0, 0.0,
-             1.0,  1.0, 1.0, 1.0,
-             1.0, -1.0, 1.0, 0.0,
-        ], dtype='f4')
+        self.quad_vertices = QUAD_VERTICES
 
         self.vbo = self.ctx.buffer(self.quad_vertices)
         
         # Shared vertex shader that provides FragCoord to the fragment shader
-        self.vert_shader = """
-            #version 330
-            in vec2 in_vert;
-            in vec2 in_texcoord;
-            out vec2 FragCoord;
-            void main() {
-                gl_Position = vec4(in_vert, 0.0, 1.0);
-                FragCoord = in_texcoord;
-            }
-        """
+        self.vert_shader = VERT_SHADER
 
         # Simple shader for the target image widget
         self.image_frag = """
@@ -68,6 +87,13 @@ class ShaderRenderer(mglw.WindowConfig):
         ])
         
         self.target_texture = None
+        self.target_pixels = None
+
+        # Only allocated when there is no window: it is what the offscreen renderers read from.
+        self.fbo = None
+        if self.offscreen_size:
+            width, height = self.offscreen_size
+            self.fbo = self.ctx.framebuffer([self.ctx.texture((width, height), 4)])
         
         if ShaderRenderer.initial_shader:
             self.update_shader(ShaderRenderer.initial_shader)
@@ -80,7 +106,16 @@ class ShaderRenderer(mglw.WindowConfig):
         # Prepend version if missing
         if not glsl.strip().startswith("#version"):
             glsl = "#version 330\n" + glsl
-            
+
+        # The genetic algorithm recompiles this thousands of times, so drop the previous
+        # program/VAO instead of letting the driver accumulate them.
+        if self.shader_vao is not None:
+            self.shader_vao.release()
+            self.shader_vao = None
+        if self.shader_prog is not None:
+            self.shader_prog.release()
+            self.shader_prog = None
+
         try:
             # We use the raw GLSL directly. The generator already provides:
             # - in vec2 FragCoord;
@@ -88,9 +123,7 @@ class ShaderRenderer(mglw.WindowConfig):
             # - out vec4 FragColor;
             # - void main() { ... }
             self.shader_prog = self.ctx.program(vertex_shader=self.vert_shader, fragment_shader=glsl)
-            self.shader_vao = self.ctx.vertex_array(self.shader_prog, [
-                (self.vbo, '2f 2f', 'in_vert', 'in_texcoord')
-            ])
+            self.shader_vao = _vertex_array(self.ctx, self.shader_prog, self.vbo)
         except Exception as e:
             print(f"Failed to compile generated shader: {e}")
             # Fallback to error shader
@@ -101,61 +134,106 @@ class ShaderRenderer(mglw.WindowConfig):
                 void main() { FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
             """
             self.shader_prog = self.ctx.program(vertex_shader=self.vert_shader, fragment_shader=error_frag)
-            self.shader_vao = self.ctx.vertex_array(self.shader_prog, [
-                (self.vbo, '2f 2f', 'in_vert', 'in_texcoord')
-            ])
+            self.shader_vao = _vertex_array(self.ctx, self.shader_prog, self.vbo)
 
-    def load_target_image(self, path):
+    def load_target_image(self, path, size=None):
+        """Load the target, upload it for the preview and keep its pixels for comparison.
+
+        ``size`` is the ``(width, height)`` the pixels are resized to. It defaults to the
+        offscreen framebuffer size, so a render and the target it is compared against always
+        come back at the same resolution; without an offscreen size the image is left as is.
+        """
         if not os.path.exists(path):
             print(f"Image not found: {path}")
             return
-            
-        img = Image.open(path).convert('RGB')
-        img = img.transpose(Image.FLIP_TOP_BOTTOM)
-        self.target_texture = self.ctx.texture(img.size, 3, img.tobytes())
+
+        size = size or self.offscreen_size
+        img = Image.open(path).convert('RGBA')
+        if size is not None and img.size != size:
+            img = img.resize(size, Image.LANCZOS)
+
+        # Kept top down, matching the flipped readback of an offscreen render.
+        self.target_pixels = np.asarray(img, dtype=np.uint8)
+        # GL samples with v=0 at the bottom, so the texture is uploaded the other way up.
+        flipped = img.transpose(Image.FLIP_TOP_BOTTOM)
+        self.target_texture = self.ctx.texture(img.size, 4, flipped.tobytes())
+
+    def draw_shader(self, time=0.0):
+        """Draw the generated shader over the current viewport."""
+        if not (self.shader_prog and self.shader_vao):
+            return
+        if 'uTime' in self.shader_prog:
+            self.shader_prog['uTime'].value = time
+        self.shader_vao.render(moderngl.TRIANGLE_STRIP)
+
+    def draw_target(self, unit=0):
+        """Draw the target image over the current viewport."""
+        if not self.target_texture:
+            return
+        self.target_texture.use(unit)
+        if 'target_image' in self.image_prog:
+            self.image_prog['target_image'].value = unit
+        self.image_vao.render(moderngl.TRIANGLE_STRIP)
 
     def on_render(self, time, frame_time):
         self.ctx.clear(0.1, 0.1, 0.1)
         
         # Get current window size
-        width, height = self.wnd.size if self.wnd else (1024, 512)
+        width, height = self.wnd.size if self.wnd else self.fbo.size
         half_width = width // 2
         
         # --- Left Widget: Generated Shader ---
         self.ctx.viewport = (0, 0, half_width, height)
-        if self.shader_prog and self.shader_vao:
-            if 'uTime' in self.shader_prog:
-                self.shader_prog['uTime'].value = time
-            self.shader_vao.render(moderngl.TRIANGLE_STRIP)
+        self.draw_shader(time)
             
         # --- Right Widget: Target Image ---
         self.ctx.viewport = (half_width, 0, half_width, height)
-        if self.target_texture:
-            self.target_texture.use(0)
-            if 'target_image' in self.image_prog:
-                self.image_prog['target_image'].value = 0
-            self.image_vao.render(moderngl.TRIANGLE_STRIP)
+        self.draw_target()
+
+    def render_pixels(self, time=0.0):
+        """Render the generated shader alone and return a top-down (H, W, 4) uint8 array.
+
+        Needs the offscreen framebuffer, i.e. a renderer built with ``offscreen_size``.
+        """
+        if self.fbo is None:
+            raise RuntimeError("render_pixels() needs an offscreen_size; this renderer has a window.")
+        self.fbo.use()
+        self.ctx.clear(0.0, 0.0, 0.0, 0.0)
+        self.ctx.viewport = (0, 0, self.fbo.width, self.fbo.height)
+        self.draw_shader(time)
+        return self._read_pixels()
+
+    def render_scene_pixels(self, time=0.0):
+        """Render the full two-widget layout offscreen and return it top-down."""
+        if self.fbo is None:
+            raise RuntimeError("render_scene_pixels() needs an offscreen_size; this renderer has a window.")
+        self.fbo.use()
+        self.on_render(time, 0.0)
+        return self._read_pixels()
+
+    def _read_pixels(self):
+        """Read the offscreen framebuffer as a top-down (H, W, 4) uint8 array."""
+        data = self.fbo.read(components=4, dtype='f1')
+        image = np.frombuffer(data, dtype=np.uint8).reshape(self.fbo.height, self.fbo.width, 4)
+        # moderngl reads bottom-up; flip so row 0 is the top like a normal image file.
+        return image[::-1].copy()
+
+
+def create_context():
+    """A windowless GL context, for running the renderer offscreen."""
+    return moderngl.create_standalone_context()
+
 
 def run_preview(shader_code, target_image_path=None, headless=False):
     if headless:
         print("Running in headless mode...")
-        ctx = moderngl.create_standalone_context()
-        width, height = 1024, 512
-        fbo = ctx.framebuffer(color_attachments=[ctx.texture((width, height), 4)])
-        fbo.use()
-        
-        renderer_inst = ShaderRenderer(ctx=ctx, wnd=None)
+        renderer_inst = ShaderRenderer(ctx=create_context(), offscreen_size=(1024, 512))
         renderer_inst.update_shader(shader_code)
         if target_image_path:
             renderer_inst.load_target_image(target_image_path)
-        
-        # Manually trigger render with fixed size since wnd is None
-        renderer_inst.on_render(0.0, 0.0)
-        
-        data = fbo.read(components=4)
-        img = Image.frombytes('RGBA', (width, height), data)
-        img = img.transpose(Image.FLIP_TOP_BOTTOM)
-        img.save('output.png')
+
+        image = renderer_inst.render_scene_pixels()
+        Image.fromarray(image).save('output.png')
         print("Headless render saved to output.png")
     else:
         ShaderRenderer.initial_shader = shader_code
