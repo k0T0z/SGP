@@ -48,12 +48,18 @@ class ShaderRenderer(mglw.WindowConfig):
     initial_shader = ""
     initial_target = None
 
+    # Set by ``run_live``: the size candidates are scored at, and the driver ``on_render`` steps
+    # once per frame. The live driver lives in a dict because a plain function kept as a class
+    # attribute would bind ``self`` when read back.
+    live_offscreen_size = None
+    live = None
+
     def __init__(self, **kwargs):
         # Runs with a window (moderngl_window supplies wnd/ctx) or without one, in which case
         # the caller passes a standalone ctx and an ``offscreen_size`` to read pixels back from.
         self.wnd = kwargs.get('wnd')
         self.ctx = kwargs.get('ctx')
-        self.offscreen_size = kwargs.get('offscreen_size')
+        self.offscreen_size = kwargs.get('offscreen_size') or ShaderRenderer.live_offscreen_size
 
         if self.wnd:
             super().__init__(**kwargs)
@@ -175,7 +181,24 @@ class ShaderRenderer(mglw.WindowConfig):
             self.image_prog['target_image'].value = unit
         self.image_vao.render(moderngl.TRIANGLE_STRIP)
 
+    def _advance_ga(self):
+        """Drive the live run one generation and show its current best."""
+        live = ShaderRenderer.live
+        if live["done"]:
+            return
+        glsl = live["step"](self)
+        if glsl is None:
+            # The run is over; the winner already compiled stays on screen.
+            live["done"] = True
+            return
+        self.update_shader(glsl)
+
     def on_render(self, time, frame_time):
+        if ShaderRenderer.live is not None:
+            # Scoring binds the offscreen framebuffer, so take the window's back before drawing.
+            self._advance_ga()
+            self.ctx.screen.use()
+
         self.ctx.clear(0.1, 0.1, 0.1)
         
         # Get current window size
@@ -245,3 +268,26 @@ def run_preview(shader_code, target_image_path=None, headless=False):
             mglw.run_window_config(ShaderRenderer)
         finally:
             sys.argv = original_argv
+
+
+def run_live(step, target_image_path=None, resolution=256):
+    """Show the two-widget window and let ``step`` drive the run, one call per frame.
+
+    ``step`` is handed this renderer on the GL thread with the window's context current, so a
+    candidate can be scored offscreen and read back exactly as in a headless run. It returns the
+    GLSL of the individual to display, or ``None`` once the run is over, after which the window
+    keeps showing the last result until it is closed.
+    """
+    ShaderRenderer.live_offscreen_size = (resolution, resolution)
+    ShaderRenderer.initial_shader = ""
+    ShaderRenderer.initial_target = target_image_path
+    ShaderRenderer.live = {"step": step, "done": False}
+
+    original_argv = sys.argv
+    sys.argv = [sys.argv[0]]
+    try:
+        mglw.run_window_config(ShaderRenderer)
+    finally:
+        sys.argv = original_argv
+        ShaderRenderer.live = None
+        ShaderRenderer.live_offscreen_size = None

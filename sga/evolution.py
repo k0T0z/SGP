@@ -36,7 +36,26 @@ from .operators import clamp
 
 
 def run_ga(toolbox, evaluate, args):
-    """A tournament GA loop with optional elitism, logging min/avg fitness per generation."""
+    """A tournament GA loop with optional elitism, run straight through to the end.
+
+    Used when nothing is watching the run; see :func:`run_ga_steps` for the steppable version.
+    """
+    steps = run_ga_steps(toolbox, evaluate, args)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as stop:
+            return stop.value
+
+
+def run_ga_steps(toolbox, evaluate, args):
+    """A tournament GA loop with optional elitism, one generation at a time.
+
+    Yields ``(generation, record, best)`` after the initial population has been scored and after
+    every generation, so a viewer can redraw in between without the loop blocking on it. The
+    population, logbook and hall of fame reach the caller as the generator's return value, so
+    :func:`run_ga` is just a drain of this.
+    """
     random.seed(args.seed)
     population = toolbox.population()
 
@@ -51,6 +70,7 @@ def run_ga(toolbox, evaluate, args):
     for individual, fitness in zip(population, fitnesses):
         individual.fitness.values = fitness
     hof.update(population)
+    yield 0, stats.compile(population), hof[0]
 
     n_elites = int(args.elitism * args.population)
     for generation in range(1, args.generations + 1):
@@ -88,6 +108,7 @@ def run_ga(toolbox, evaluate, args):
         # Only the new row: logbook.stream would re-print every earlier generation too.
         print(f"gen {generation:>4}  nevals {len(invalid):>4}  sigma {sigma:.2e}  "
               f"min {record['min']:.6f}  avg {record['avg']:.6f}", flush=True)
+        yield generation, record, hof[0]
 
     return population, logbook, hof
 

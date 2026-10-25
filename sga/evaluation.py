@@ -27,24 +27,14 @@
 
 """The fitness function.
 
-Matching the target means drawing the same ink, in the same places, in the same colour.
-shader-gen scores a candidate by summing ``|dA| + |dR| + |dG| + |dB|`` over every pixel
-(``ai-agent/fitness.hpp``), which cannot express that: on this target it makes an empty canvas
-the *global optimum*. An empty render scores 1.0 on that metric, any candidate that paints
-something paints it in the wrong place and scores worse, so the search has nowhere to go but
-towards drawing nothing.
-
-This instead rewards agreement, and is minimised:
-
-    score   = (IoU of the two ink masks + colour agreement over the shared ink) / 2
-    fitness = 1 - score
+Matching the target means drawing the same channels, in the same places. A candidate is scored
+by the mean squared error between its render and the target, taken over every pixel and all
+four ``(H, W, 4)`` channels (alpha, red, green, blue), and is minimised:
 
     0.0  the render is pixel-identical to the target
-    1.0  nothing is drawn, or nothing lands on the target
 
-Drawing nothing is the worst result rather than the best, so a blind random start has a slope
-to climb: every pixel placed on the target's ink raises the score, and landing the target's
-shapes in the wrong colour still beats not landing them at all.
+Because every channel of every pixel contributes, the search has a slope everywhere rather
+than only where ink happens to overlap.
 """
 
 import numpy as np
@@ -55,38 +45,10 @@ from .runtime import shader_gen_py
 # real score, so invalid individuals always sort last.
 PENALTY = 1e9
 
-
-def ink_mask(pixels):
-    """Where a top-down (H, W, 4) uint8 image draws anything at all."""
-    return pixels[..., 3] > 0
-
-
-def coverage_distance(image, target) -> float:
-    """``1 - score`` for a render, given the target.
-
-    ``image`` and ``target`` are top-down (H, W, 4) uint8 arrays. Half the score is the
-    intersection over union of the two ink masks; the other half is how closely the colours
-    agree on the ink the two images share.
-    """
-    image_mask = ink_mask(image)
-    target_mask = ink_mask(target)
-    union = int(np.count_nonzero(image_mask | target_mask))
-    if union == 0:
-        # Nothing drawn and nothing to draw: the render is as good as it can be.
-        return 0.0
-
-    shared = image_mask & target_mask
-    intersection = int(np.count_nonzero(shared))
-    iou = intersection / union
-    if intersection == 0:
-        # No shared ink, so there is no colour to compare.
-        colour = 0.0
-    else:
-        difference = np.abs(image[..., :3][shared].astype(np.int32)
-                            - target[..., :3][shared].astype(np.int32))
-        colour = 1.0 - float(difference.mean()) / 255.0
-
-    return 1.0 - 0.5 * (iou + colour)
+def mse(image, target) -> float:
+    """Mean squared error over the ARGB channels of two top-down (H, W, 4) uint8 arrays."""
+    difference = image.astype(np.float64) - target.astype(np.float64)
+    return float(np.mean(difference * difference))
 
 
 class Evaluator:
@@ -120,4 +82,4 @@ class Evaluator:
         except Exception:
             # The GA routinely produces parameter combinations whose shader fails to compile.
             return PENALTY
-        return coverage_distance(image, self.target)
+        return mse(image, self.target)

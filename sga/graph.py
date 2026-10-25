@@ -32,7 +32,7 @@ An encoded graph is a comma separated list of entities, each semicolon separated
   - Connections: ``1;<connection_id>;<from_node_id>;<from_port>;<to_node_id>;<to_port>``
 """
 
-from .parameters import format_value, gene_to_value, value_to_gene
+from .parameters import format_value, gene_to_value
 
 # The fixed topology. Nodes and connections are copied verbatim on every evaluation; only the
 # parameter values are replaced by the individual's genes.
@@ -97,16 +97,3 @@ class GraphBuilder:
         entities = [";".join(tokens) for tokens in nodes]
         entities += [";".join(tokens) for tokens in self.connections]
         return ",".join(entities)
-
-
-def declared_genes(nodes, specs) -> list:
-    """The gene vector that reproduces the parameter values in ``nodes`` verbatim.
-
-    Used to seed the initial population around the graph's own values, so the search can
-    refine a working point instead of rediscovering one from a uniformly random start.
-    """
-    genes = []
-    for spec in specs:
-        token = nodes[spec["node"]][3 + spec["offset"]]
-        genes.append(value_to_gene(spec, float(token.split("=", 1)[1])))
-    return genes

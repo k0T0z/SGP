@@ -42,8 +42,8 @@ from PIL import Image
 
 import renderer
 from .evaluation import Evaluator
-from .evolution import plot_fitness, run_ga
-from .graph import SAMPLE_GRAPH, GraphBuilder, declared_genes, parse_graph
+from .evolution import plot_fitness, run_ga, run_ga_steps
+from .graph import SAMPLE_GRAPH, GraphBuilder, parse_graph
 from .operators import build_toolbox
 from .parameters import build_gene_specs
 from .runtime import shader_gen_py
@@ -78,12 +78,6 @@ def parse_args(argv=None):
                              "operator) instead of nudged locally; 1.0 is shader-gen exactly. A "
                              "full-range re-draw always discards the fine-tuning, so it is off by "
                              "default.")
-    parser.add_argument("--seed-fraction", type=float, default=0.0,
-                        help="Fraction of the initial population jittered around the graph's own "
-                             "parameter values; the rest starts uniform random. 0 is a blind "
-                             "random start.")
-    parser.add_argument("--seed-sigma", type=float, default=0.001,
-                        help="Standard deviation of the jitter used for the seeded individuals.")
     parser.add_argument("--elitism", type=float, default=0.2, help="Elite fraction carried over untouched (mirrors shader-gen).")
     parser.add_argument("--tournament-size", type=int, default=3, help="Tournament selection size.")
     parser.add_argument("--blend-alpha", type=float, default=0.5, help="cxBlend alpha.")
@@ -92,44 +86,34 @@ def parse_args(argv=None):
     parser.add_argument("--preview", dest="preview", action="store_true", default=True,
                         help="Open the live preview of the best individual at the end (default).")
     parser.add_argument("--no-preview", dest="preview", action="store_false", help="Skip the live preview.")
+    parser.add_argument("--show-renderer", dest="show_renderer", action="store_true", default=False,
+                        help="Show the two-widget window while the algorithm runs: one generation "
+                             "per frame, the current best beside the target. Off by default, "
+                             "which keeps the run headless and unthrottled.")
+    parser.add_argument("--no-show-renderer", dest="show_renderer", action="store_false",
+                        help="Run headless (default).")
     return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_args()
-
-    nodes, connections = parse_graph(args.graph)
-    specs = build_gene_specs(nodes)
-    if not specs:
-        print("The graph exposes no parameters to optimise.", file=sys.stderr)
-        return 1
-
-    builder = GraphBuilder(nodes, connections, specs)
-    # One renderer, used offscreen: it owns the target's pixels and renders each candidate.
-    scene = renderer.ShaderRenderer(ctx=renderer.create_context(),
-                                    offscreen_size=(args.resolution, args.resolution))
-    scene.load_target_image(args.target)
-    if scene.target_pixels is None:
-        print(f"Could not read the target image {args.target!r}.", file=sys.stderr)
-        return 1
-    evaluator = Evaluator(builder, scene, scene.target_pixels)
-
-    known_good = declared_genes(nodes, specs)
+def _print_run_info(args, specs, target_pixels):
+    """The run's parameters, and what the target looks like at the size it is compared at."""
     print(f"Optimising {len(specs)} parameters: "
           f"{sum(s['kind'] == 'continuous' for s in specs)} continuous, "
           f"{sum(s['kind'] == 'discrete' for s in specs)} discrete.")
     print(f"Population: {args.population}, generations: {args.generations}, "
           f"target: {args.target} @ {args.resolution}x{args.resolution}.")
-    print(f"Target ink: {int((scene.target_pixels[..., 3] > 0).sum())} of "
+    print(f"Target ink: {int((target_pixels[..., 3] > 0).sum())} of "
           f"{args.resolution * args.resolution} pixels at {args.resolution}x{args.resolution} "
           f"(an empty render scores 1.0, a pixel-identical render 0.0).")
-    if args.seed_fraction > 0:
-        print(f"{args.seed_fraction:.0%} of the initial population is seeded around the graph's "
-              f"own values (sigma {args.seed_sigma}).")
 
-    toolbox = build_toolbox(evaluator, len(specs), args, known_good=known_good)
-    _, logbook, hof = run_ga(toolbox, evaluator, args)
 
+def _save_artifacts(args, builder, scene, result):
+    """Write the best graph, shader, render and fitness plot.
+
+    Returns ``(best_graph, best_glsl, status, best_fitness)`` so the caller can report and
+    preview the winner without regenerating anything.
+    """
+    _, logbook, hof = result
     best = hof[0]
     best_graph = builder(best)
     status, best_glsl = shader_gen_py.generate_shader(best_graph)
@@ -142,13 +126,94 @@ def main() -> int:
         scene.update_shader(best_glsl)
         Image.fromarray(scene.render_pixels()).save(out_dir / "best_output.png")
     plot_fitness(logbook, out_dir / "fitness.png")
+    return best_graph, best_glsl, status, best.fitness.values[0]
 
-    print(f"\nBest fitness: {best.fitness.values[0]:.6f}")
+
+def _report(args, best_graph, best_fitness):
+    print(f"\nBest fitness: {best_fitness:.6f}")
     print(f"Best graph: {best_graph}")
-    print(f"Artifacts written to {out_dir}")
+    print(f"Artifacts written to {args.out_dir}")
+
+
+def _run_headless(args, builder, specs) -> int:
+    """Score candidates in an offscreen framebuffer with no window, as fast as they can go."""
+    # One renderer, used offscreen: it owns the target's pixels and renders each candidate.
+    scene = renderer.ShaderRenderer(ctx=renderer.create_context(),
+                                    offscreen_size=(args.resolution, args.resolution))
+    scene.load_target_image(args.target)
+    if scene.target_pixels is None:
+        print(f"Could not read the target image {args.target!r}.", file=sys.stderr)
+        return 1
+
+    _print_run_info(args, specs, scene.target_pixels)
+
+    evaluator = Evaluator(builder, scene, scene.target_pixels)
+    toolbox = build_toolbox(evaluator, len(specs), args)
+    result = run_ga(toolbox, evaluator, args)
+
+    best_graph, best_glsl, status, best_fitness = _save_artifacts(args, builder, scene, result)
+    _report(args, best_graph, best_fitness)
 
     if args.preview and status:
         print("Opening preview (close the window to exit)...")
         renderer.run_preview(best_glsl, target_image_path=args.target, headless=False)
 
     return 0
+
+
+def _run_live(args, builder, specs) -> int:
+    """Show the window and let it drive the loop, one generation per frame.
+
+    The window owns the context the candidates are scored in, so the evaluator, the toolbox and
+    the artifacts are all set up on the first frame, once that context exists.
+    """
+    state = {}
+
+    def step(scene):
+        """One generation; returns the GLSL of the current best, or ``None`` when finished."""
+        if "steps" not in state:
+            if scene.target_pixels is None:
+                print(f"Could not read the target image {args.target!r}.", file=sys.stderr)
+                state["failed"] = True
+                return None
+            _print_run_info(args, specs, scene.target_pixels)
+            evaluator = Evaluator(builder, scene, scene.target_pixels)
+            toolbox = build_toolbox(evaluator, len(specs), args)
+            state["steps"] = run_ga_steps(toolbox, evaluator, args)
+
+        try:
+            _, _, best = next(state["steps"])
+        except StopIteration as stop:
+            state["artifacts"] = _save_artifacts(args, builder, scene, stop.value)
+            return None
+
+        status, glsl = shader_gen_py.generate_shader(builder(best))
+        return glsl if status else None
+
+    renderer.run_live(step, target_image_path=args.target, resolution=args.resolution)
+
+    if state.get("failed"):
+        return 1
+    if "artifacts" not in state:
+        print("Window closed before the run finished; nothing was written.", file=sys.stderr)
+        return 1
+
+    best_graph, _, _, best_fitness = state["artifacts"]
+    _report(args, best_graph, best_fitness)
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+
+    nodes, connections = parse_graph(args.graph)
+    specs = build_gene_specs(nodes)
+    if not specs:
+        print("The graph exposes no parameters to optimise.", file=sys.stderr)
+        return 1
+
+    builder = GraphBuilder(nodes, connections, specs)
+
+    if args.show_renderer:
+        return _run_live(args, builder, specs)
+    return _run_headless(args, builder, specs)

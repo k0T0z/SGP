@@ -36,15 +36,6 @@ of the ``VisualShaderNode`` message, exactly as in the encoded graph format.
 
 from .runtime import shader_gen_py
 
-# shader-gen declares ColorConstant as (0.0, 1.0), but its generator emits
-# ``vec4(r, g, b, a) / 255.0`` (``generator/visual_shader_node_generators.cpp``) and so divides
-# whatever the encoded graph carries: the encoded domain for a colour is 0..255, not 0..1. A
-# render of the target with colour values drawn from 0..1 comes out completely empty (measured:
-# 0 ink pixels), which would make the target unreachable. The declared range is therefore
-# rescaled into the domain the string format uses.
-ENCODED_DOMAIN_SCALE = {8: 255.0}
-
-
 def get_range(node_type: int, field_number: int):
     """Return ``('discrete', [values])`` or ``('continuous', (lo, hi))`` for a node field.
 
@@ -60,8 +51,7 @@ def get_range(node_type: int, field_number: int):
             f"shader-gen declares no mutation range for node type {node_type}, "
             f"field {field_number}."
         )
-    scale = ENCODED_DOMAIN_SCALE.get(node_type, 1.0)
-    return "continuous", (limits[0] * scale, limits[1] * scale)
+    return "continuous", (limits[0], limits[1])
 
 
 def build_gene_specs(nodes):
@@ -95,19 +85,6 @@ def gene_to_value(spec, unit: float):
         index = min(int(unit * len(values)), len(values) - 1)
         return values[index]
     return spec["lo"] + unit * (spec["hi"] - spec["lo"])
-
-
-def value_to_gene(spec, value) -> float:
-    """The inverse of :func:`gene_to_value`: map a declared value back onto [0, 1]."""
-    if spec["kind"] == "discrete":
-        values = spec["values"]
-        index = min(range(len(values)), key=lambda i: abs(values[i] - float(value)))
-        # gene_to_value uses int(unit * n), so the middle of each index's slot round-trips.
-        return (index + 0.5) / len(values)
-    lo, hi = spec["lo"], spec["hi"]
-    if hi == lo:
-        return 0.0
-    return min(1.0, max(0.0, (float(value) - lo) / (hi - lo)))
 
 
 def format_value(spec, value) -> str:

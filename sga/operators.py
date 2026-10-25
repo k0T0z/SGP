@@ -88,25 +88,7 @@ class SigmaSchedule:
         return self.sigma
 
 
-def seed_population(toolbox, size, known_good, seed_fraction, seed_sigma):
-    """Fill a population with individuals jittered around ``known_good`` plus random ones.
-
-    ``known_good`` is the gene vector the graph string already declares; ``seed_fraction`` of
-    the population is drawn as that vector plus Gaussian noise, and the rest is uniform random
-    so the search still explores away from that point.
-    """
-    population = []
-    if known_good:
-        for _ in range(int(seed_fraction * size)):
-            genes = [clamp_gene(g + random.gauss(0.0, seed_sigma)) for g in known_good]
-            population.append(creator.Individual(genes))
-    for _ in range(size - len(population)):
-        population.append(toolbox.individual())
-    random.shuffle(population)
-    return population
-
-
-def build_toolbox(evaluate, n_genes: int, args, known_good=None):
+def build_toolbox(evaluate, n_genes: int, args):
     """Register every operator the evolution loop needs.
 
     Genes are floats in [0, 1] and are mapped onto each parameter's declared range by
@@ -120,11 +102,7 @@ def build_toolbox(evaluate, n_genes: int, args, known_good=None):
     toolbox = base.Toolbox()
     toolbox.register("attr_unit", random.random)
     toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_unit, n=n_genes)
-
-    def population(size=args.population):
-        return seed_population(toolbox, size, known_good, args.seed_fraction, args.seed_sigma)
-
-    toolbox.register("population", population)
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual, n=args.population)
     toolbox.register("evaluate", evaluate)
     toolbox.register("mate", tools.cxBlend, alpha=args.blend_alpha)
 
