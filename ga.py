@@ -28,7 +28,7 @@
 """Entry point for the SGP genetic algorithm.
 
     python ga.py
-    python ga.py --generations 50 --population 40 --no-preview
+    python ga.py --generations 50 --population 40
 
 The implementation lives in the ``sga`` package; see ``sga/__init__.py`` for the module map
 and ``python ga.py --help`` for the options.

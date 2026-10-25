@@ -83,15 +83,10 @@ def parse_args(argv=None):
     parser.add_argument("--blend-alpha", type=float, default=0.5, help="cxBlend alpha.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
 
-    parser.add_argument("--preview", dest="preview", action="store_true", default=True,
-                        help="Open the live preview of the best individual at the end (default).")
-    parser.add_argument("--no-preview", dest="preview", action="store_false", help="Skip the live preview.")
     parser.add_argument("--show-renderer", dest="show_renderer", action="store_true", default=False,
                         help="Show the two-widget window while the algorithm runs: one generation "
                              "per frame, the current best beside the target. Off by default, "
                              "which keeps the run headless and unthrottled.")
-    parser.add_argument("--no-show-renderer", dest="show_renderer", action="store_false",
-                        help="Run headless (default).")
     return parser.parse_args(argv)
 
 
@@ -110,8 +105,8 @@ def _print_run_info(args, specs, target_pixels):
 def _save_artifacts(args, builder, scene, result):
     """Write the best graph, shader, render and fitness plot.
 
-    Returns ``(best_graph, best_glsl, status, best_fitness)`` so the caller can report and
-    preview the winner without regenerating anything.
+    Returns ``(best_graph, best_fitness)`` so the caller can report the winner without
+    regenerating anything.
     """
     _, logbook, hof = result
     best = hof[0]
@@ -126,7 +121,7 @@ def _save_artifacts(args, builder, scene, result):
         scene.update_shader(best_glsl)
         Image.fromarray(scene.render_pixels()).save(out_dir / "best_output.png")
     plot_fitness(logbook, out_dir / "fitness.png")
-    return best_graph, best_glsl, status, best.fitness.values[0]
+    return best_graph, best.fitness.values[0]
 
 
 def _report(args, best_graph, best_fitness):
@@ -151,12 +146,8 @@ def _run_headless(args, builder, specs) -> int:
     toolbox = build_toolbox(evaluator, len(specs), args)
     result = run_ga(toolbox, evaluator, args)
 
-    best_graph, best_glsl, status, best_fitness = _save_artifacts(args, builder, scene, result)
+    best_graph, best_fitness = _save_artifacts(args, builder, scene, result)
     _report(args, best_graph, best_fitness)
-
-    if args.preview and status:
-        print("Opening preview (close the window to exit)...")
-        renderer.run_preview(best_glsl, target_image_path=args.target, headless=False)
 
     return 0
 
@@ -198,7 +189,7 @@ def _run_live(args, builder, specs) -> int:
         print("Window closed before the run finished; nothing was written.", file=sys.stderr)
         return 1
 
-    best_graph, _, _, best_fitness = state["artifacts"]
+    best_graph, best_fitness = state["artifacts"]
     _report(args, best_graph, best_fitness)
     return 0
 

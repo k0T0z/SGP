@@ -9,7 +9,7 @@ I aim to solve the Shader Generation Problem using machine learning.
 - `src/bindings.cpp` — the pybind11 module `shader_gen_py`.
 - `main.py` — smoke test that generates the GLSL for the graph shader-gen uses in its own
   regression test (`tests/generator/test_vs_generator.cpp`).
-- `renderer.py` — owns all GL rendering. One `ShaderRenderer` runs either in the preview
+- `renderer.py` — owns all GL rendering. One `ShaderRenderer` runs either in the live
   window or offscreen, and in both cases hands back the pixels of the generated shader and of
   the target, which is what the genetic algorithm scores candidates with.
 - `ga.py` — entry point for the genetic algorithm. The implementation lives in `sga/`:
@@ -81,7 +81,7 @@ Output:0` — the same output shader-gen's own generator test asserts.
 
     pip install -r requirements.txt
     python ga.py                                 # 100 individuals x 500 generations
-    python ga.py --generations 50 --population 40 --no-preview
+    python ga.py --generations 50 --population 40
 
 The topology is fixed and only parameters are searched, each over the range shader-gen
 declares for its `(node type, field)` pair — asked for through

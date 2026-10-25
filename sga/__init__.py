@@ -38,9 +38,9 @@ shader-gen declares for each (node type, field) pair.
     evolution   - the generational loop and the fitness plot
     cli         - argument parsing and the entry point
 
-Rendering itself lives in ``renderer.py`` at the project root. It runs either in a preview
+Rendering itself lives in ``renderer.py`` at the project root. It runs either in a live
 window or offscreen, and in both cases hands back the pixels of the generated shader and of
-the target, so the GA samples through the same renderer the preview uses.
+the target, so the GA samples through the same renderer the live window uses.
 
 Run ``python ga.py``.
 """

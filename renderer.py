@@ -5,7 +5,7 @@ from PIL import Image
 import os
 import sys
 
-# Shared by the preview window and the offscreen renderer the genetic algorithm samples with.
+# Shared by the live window and the offscreen renderer the genetic algorithm samples with.
 VERT_SHADER = """
     #version 330
     in vec2 in_vert;
@@ -39,7 +39,7 @@ def _vertex_array(ctx, program, vbo):
 
 class ShaderRenderer(mglw.WindowConfig):
     gl_version = (3, 3)
-    title = "SGP - Shader Preview (Isolated Widgets)"
+    title = "SGP - Shader View (Isolated Widgets)"
     window_size = (1024, 512)
     aspect_ratio = 2.0
     resizable = True
@@ -143,7 +143,7 @@ class ShaderRenderer(mglw.WindowConfig):
             self.shader_vao = _vertex_array(self.ctx, self.shader_prog, self.vbo)
 
     def load_target_image(self, path, size=None):
-        """Load the target, upload it for the preview and keep its pixels for comparison.
+        """Load the target, upload it for the window and keep its pixels for comparison.
 
         ``size`` is the ``(width, height)`` the pixels are resized to. It defaults to the
         offscreen framebuffer size, so a render and the target it is compared against always
@@ -245,29 +245,6 @@ class ShaderRenderer(mglw.WindowConfig):
 def create_context():
     """A windowless GL context, for running the renderer offscreen."""
     return moderngl.create_standalone_context()
-
-
-def run_preview(shader_code, target_image_path=None, headless=False):
-    if headless:
-        print("Running in headless mode...")
-        renderer_inst = ShaderRenderer(ctx=create_context(), offscreen_size=(1024, 512))
-        renderer_inst.update_shader(shader_code)
-        if target_image_path:
-            renderer_inst.load_target_image(target_image_path)
-
-        image = renderer_inst.render_scene_pixels()
-        Image.fromarray(image).save('output.png')
-        print("Headless render saved to output.png")
-    else:
-        ShaderRenderer.initial_shader = shader_code
-        ShaderRenderer.initial_target = target_image_path
-        
-        original_argv = sys.argv
-        sys.argv = [sys.argv[0]]
-        try:
-            mglw.run_window_config(ShaderRenderer)
-        finally:
-            sys.argv = original_argv
 
 
 def run_live(step, target_image_path=None, resolution=256):
