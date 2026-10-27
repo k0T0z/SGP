@@ -238,3 +238,8 @@ __marimo__/
 # Run artifacts written by ga.py (best_output.png and fitness.png are already covered by *.png).
 best_graph.txt
 best_shader.glsl
+
+# Per-generation best shaders written by the GA.
+shaders/
+
+.vscode/

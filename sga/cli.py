@@ -27,20 +27,30 @@
 
 """Command line entry point.
 
-Population size, generations, crossover and elitism default to shader-gen's ``Parameters``.
-Mutation does not: shader-gen re-draws a parameter over its full range, which discards any
-progress a candidate has made towards the target, so the default here is a Gaussian nudge,
-annealed from ``--mutation-sigma`` down to ``--mutation-sigma-final``, and the reset is left
-off (set ``--reset-probability 1.0`` for shader-gen's operator verbatim).
+Crossover and elitism default to shader-gen's ``Parameters``. Population, generations and the
+mutation operator do not, because the search here runs over a fixed topology: 19 genes, three
+of them driving chaotic noise fields, so the fitness surface is rugged and the basin around a
+good answer is narrow. The defaults therefore spend more samples (``--population``,
+``--generations``) and nudge far more gently than shader-gen's full-range re-draw: a Gaussian
+perturbation annealed from ``--mutation-sigma`` down to ``--mutation-sigma-final``, applied at
+shader-gen's per-gene ``--mutation-probability``, with a small ``--reset-probability`` leaving
+shader-gen's operator reachable.
 """
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
 from PIL import Image
 
-import renderer
+# ``renderer`` lives at the project root, which is not necessarily on ``sys.path`` when the
+# package is run as ``python -m sga.cli`` or from another directory.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+import renderer  # noqa: E402
 from .evaluation import Evaluator
 from .evolution import plot_fitness, run_ga, run_ga_steps
 from .graph import SAMPLE_GRAPH, GraphBuilder, parse_graph
@@ -58,26 +68,35 @@ def parse_args(argv=None):
     parser.add_argument("--out-dir", type=str, default=str(Path(__file__).resolve().parent.parent),
                         help="Directory for the saved artifacts.")
 
-    parser.add_argument("--population", type=int, default=100, help="Population size (mirrors shader-gen).")
-    parser.add_argument("--generations", type=int, default=500, help="Number of generations (mirrors shader-gen).")
+    parser.add_argument("--population", type=int, default=200,
+                        help="Population size. Doubled over shader-gen's 100: the space is 19 "
+                             "dimensional and rugged, so more samples per generation buy a better "
+                             "chance of landing near a good basin.")
+    parser.add_argument("--generations", type=int, default=1000,
+                        help="Number of generations. Doubled over shader-gen's 500 to give the "
+                             "sigma anneal room to walk from coarse exploration to the fine end.")
     parser.add_argument("--crossover-probability", type=float, default=0.8, help="Crossover probability (mirrors shader-gen).")
-    parser.add_argument("--mutation-probability", type=float, default=0.5,
-                        help="Per-gene mutation probability, applied to every offspring.")
-    parser.add_argument("--mutation-sigma", type=float, default=0.05,
+    parser.add_argument("--mutation-probability", type=float, default=0.1,
+                        help="Per-gene mutation probability, applied to every offspring. "
+                             "shader-gen's own value (ai-agent/parameters.cpp); the previous 0.5 "
+                             "re-rolled roughly ten of the nineteen genes per child and threw "
+                             "away most of what a candidate had already matched.")
+    parser.add_argument("--mutation-sigma", type=float, default=0.1,
                         help="Standard deviation of the local Gaussian gene perturbation at the "
-                             "start of the run, as a fraction of each parameter's range. The "
-                             "fitness slope is broad far from the target, so the run starts "
-                             "coarse and anneals towards --mutation-sigma-final.")
+                             "start of the run, as a fraction of each parameter's range. A blind "
+                             "start needs steps large enough to cross a range such as the "
+                             "0-360 noise offset before the anneal narrows in on a basin.")
     parser.add_argument("--mutation-sigma-final", type=float, default=1e-4,
                         help="Sigma the run anneals to geometrically by the last generation. The "
                              "usable slope around the correct values is only a few 1e-4 wide, so "
                              "the fine end is what lets a candidate settle. Equal to "
                              "--mutation-sigma holds the sigma fixed.")
-    parser.add_argument("--reset-probability", type=float, default=0.0,
+    parser.add_argument("--reset-probability", type=float, default=0.05,
                         help="Chance a mutated gene is re-drawn over its full range (shader-gen's "
                              "operator) instead of nudged locally; 1.0 is shader-gen exactly. A "
-                             "full-range re-draw always discards the fine-tuning, so it is off by "
-                             "default.")
+                             "full-range re-draw discards the fine-tuning of the gene it hits, so "
+                             "this stays low, but a small non-zero chance is what lets a gene the "
+                             "search locked in early escape its basin.")
     parser.add_argument("--elitism", type=float, default=0.2, help="Elite fraction carried over untouched (mirrors shader-gen).")
     parser.add_argument("--tournament-size", type=int, default=3, help="Tournament selection size.")
     parser.add_argument("--blend-alpha", type=float, default=0.5, help="cxBlend alpha.")
@@ -100,6 +119,25 @@ def _print_run_info(args, specs, target_pixels):
     print(f"Target ink: {int((target_pixels[..., 3] > 0).sum())} of "
           f"{args.resolution * args.resolution} pixels at {args.resolution}x{args.resolution} "
           f"(an empty render scores 1.0, a pixel-identical render 0.0).")
+
+
+def _shaders_dir(args):
+    """The gitignored folder the per-generation shaders are written to."""
+    return Path(args.out_dir) / "shaders"
+
+
+def _clear_generation_shaders(args):
+    """Wipe the per-generation shader folder so every launch starts from a clean slate."""
+    shaders_dir = _shaders_dir(args)
+    if shaders_dir.is_dir():
+        shutil.rmtree(shaders_dir)
+
+
+def _save_generation_shader(args, generation, glsl):
+    """Write one generation's best shader into the gitignored ``shaders`` folder."""
+    shaders_dir = _shaders_dir(args)
+    shaders_dir.mkdir(parents=True, exist_ok=True)
+    (shaders_dir / f"gen_{generation:04d}.glsl").write_text(glsl, encoding="utf-8")
 
 
 def _save_artifacts(args, builder, scene, result):
@@ -144,7 +182,13 @@ def _run_headless(args, builder, specs) -> int:
 
     evaluator = Evaluator(builder, scene, scene.target_pixels)
     toolbox = build_toolbox(evaluator, len(specs), args)
-    result = run_ga(toolbox, evaluator, args)
+
+    def write_generation(generation, best):
+        status, glsl = shader_gen_py.generate_shader(builder(best))
+        if status:
+            _save_generation_shader(args, generation, glsl)
+
+    result = run_ga(toolbox, evaluator, args, on_generation=write_generation)
 
     best_graph, best_fitness = _save_artifacts(args, builder, scene, result)
     _report(args, best_graph, best_fitness)
@@ -152,44 +196,73 @@ def _run_headless(args, builder, specs) -> int:
     return 0
 
 
+class LiveDriver:
+    """Steps the GA one generation at a time, handing the current best to the window to draw.
+
+    The window owns the GL context candidates are scored in, so the evaluator and the toolbox are
+    built on the first ``advance`` call, once that renderer exists. ``artifacts`` holds the run's
+    ``(best_graph, best_fitness)`` once it finishes, and ``failed`` marks a run that stopped
+    without a result: an unreadable target, or a winner that will not generate a shader.
+    """
+
+    def __init__(self, args, builder, specs):
+        self.args = args
+        self.builder = builder
+        self.specs = specs
+        self.steps = None
+        self.artifacts = None
+        self.failed = False
+        self.done = False
+
+    def advance(self, scene):
+        """One generation; returns the GLSL of the current best, or ``None`` once finished."""
+        if self.done:
+            return None
+
+        if self.steps is None:
+            if scene.target_pixels is None:
+                print(f"Could not read the target image {self.args.target!r}.", file=sys.stderr)
+                self.failed = True
+                self.done = True
+                return None
+            _print_run_info(self.args, self.specs, scene.target_pixels)
+            evaluator = Evaluator(self.builder, scene, scene.target_pixels)
+            self.steps = run_ga_steps(build_toolbox(evaluator, len(self.specs), self.args),
+                                      evaluator, self.args)
+
+        try:
+            generation, _, best = next(self.steps)
+        except StopIteration as stop:
+            self.artifacts = _save_artifacts(self.args, self.builder, scene, stop.value)
+            self.done = True
+            return None
+
+        status, glsl = shader_gen_py.generate_shader(self.builder(best))
+        if not status:
+            print("The run's best individual will not generate a shader; stopping.", file=sys.stderr)
+            self.failed = True
+            self.done = True
+            return None
+        _save_generation_shader(self.args, generation, glsl)
+        return glsl
+
+
 def _run_live(args, builder, specs) -> int:
     """Show the window and let it drive the loop, one generation per frame.
 
-    The window owns the context the candidates are scored in, so the evaluator, the toolbox and
-    the artifacts are all set up on the first frame, once that context exists.
+    The window owns the context the candidates are scored in, so the driver builds its evaluator
+    and toolbox on the first frame, once that context exists.
     """
-    state = {}
+    driver = LiveDriver(args, builder, specs)
+    renderer.run_live(driver, target_image_path=args.target, resolution=args.resolution)
 
-    def step(scene):
-        """One generation; returns the GLSL of the current best, or ``None`` when finished."""
-        if "steps" not in state:
-            if scene.target_pixels is None:
-                print(f"Could not read the target image {args.target!r}.", file=sys.stderr)
-                state["failed"] = True
-                return None
-            _print_run_info(args, specs, scene.target_pixels)
-            evaluator = Evaluator(builder, scene, scene.target_pixels)
-            toolbox = build_toolbox(evaluator, len(specs), args)
-            state["steps"] = run_ga_steps(toolbox, evaluator, args)
-
-        try:
-            _, _, best = next(state["steps"])
-        except StopIteration as stop:
-            state["artifacts"] = _save_artifacts(args, builder, scene, stop.value)
-            return None
-
-        status, glsl = shader_gen_py.generate_shader(builder(best))
-        return glsl if status else None
-
-    renderer.run_live(step, target_image_path=args.target, resolution=args.resolution)
-
-    if state.get("failed"):
+    if driver.failed:
         return 1
-    if "artifacts" not in state:
+    if driver.artifacts is None:
         print("Window closed before the run finished; nothing was written.", file=sys.stderr)
         return 1
 
-    best_graph, best_fitness = state["artifacts"]
+    best_graph, best_fitness = driver.artifacts
     _report(args, best_graph, best_fitness)
     return 0
 
@@ -204,6 +277,7 @@ def main() -> int:
         return 1
 
     builder = GraphBuilder(nodes, connections, specs)
+    _clear_generation_shaders(args)
 
     if args.show_renderer:
         return _run_live(args, builder, specs)

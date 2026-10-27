@@ -35,12 +35,12 @@ from deap import tools
 from .operators import clamp
 
 
-def run_ga(toolbox, evaluate, args):
+def run_ga(toolbox, evaluate, args, on_generation=None):
     """A tournament GA loop with optional elitism, run straight through to the end.
 
     Used when nothing is watching the run; see :func:`run_ga_steps` for the steppable version.
     """
-    steps = run_ga_steps(toolbox, evaluate, args)
+    steps = run_ga_steps(toolbox, evaluate, args, on_generation)
     while True:
         try:
             next(steps)
@@ -48,13 +48,16 @@ def run_ga(toolbox, evaluate, args):
             return stop.value
 
 
-def run_ga_steps(toolbox, evaluate, args):
+def run_ga_steps(toolbox, evaluate, args, on_generation=None):
     """A tournament GA loop with optional elitism, one generation at a time.
 
     Yields ``(generation, record, best)`` after the initial population has been scored and after
     every generation, so a viewer can redraw in between without the loop blocking on it. The
     population, logbook and hall of fame reach the caller as the generator's return value, so
     :func:`run_ga` is just a drain of this.
+
+    ``on_generation``, if given, is called with ``(generation, best)`` before each yield so a
+    caller can persist the current best without stepping the loop itself.
     """
     random.seed(args.seed)
     population = toolbox.population()
@@ -70,6 +73,8 @@ def run_ga_steps(toolbox, evaluate, args):
     for individual, fitness in zip(population, fitnesses):
         individual.fitness.values = fitness
     hof.update(population)
+    if on_generation is not None:
+        on_generation(0, hof[0])
     yield 0, stats.compile(population), hof[0]
 
     n_elites = int(args.elitism * args.population)
@@ -102,6 +107,8 @@ def run_ga_steps(toolbox, evaluate, args):
 
         population = elites + offspring
         hof.update(population)
+        if on_generation is not None:
+            on_generation(generation, hof[0])
 
         record = stats.compile(population)
         logbook.record(gen=generation, nevals=len(invalid), sigma=sigma, **record)

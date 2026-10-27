@@ -5,27 +5,6 @@ from PIL import Image
 import os
 import sys
 
-# Shared by the live window and the offscreen renderer the genetic algorithm samples with.
-VERT_SHADER = """
-    #version 330
-    in vec2 in_vert;
-    in vec2 in_texcoord;
-    out vec2 FragCoord;
-    void main() {
-        gl_Position = vec4(in_vert, 0.0, 1.0);
-        FragCoord = in_texcoord;
-    }
-"""
-
-QUAD_VERTICES = np.array([
-    # x, y, u, v
-    -1.0,  1.0, 0.0, 1.0,
-    -1.0, -1.0, 0.0, 0.0,
-     1.0,  1.0, 1.0, 1.0,
-     1.0, -1.0, 1.0, 0.0,
-], dtype='f4')
-
-
 def _vertex_array(ctx, program, vbo):
     """Bind the quad, skipping attributes the driver optimised away.
 
@@ -45,14 +24,13 @@ class ShaderRenderer(mglw.WindowConfig):
     resizable = True
 
     # These will be set before running the window
-    initial_shader = ""
     initial_target = None
 
-    # Set by ``run_live``: the size candidates are scored at, and the driver ``on_render`` steps
-    # once per frame. The live driver lives in a dict because a plain function kept as a class
-    # attribute would bind ``self`` when read back.
+    # Set by ``run_live``: the size candidates are scored at, and the driver ``on_render`` asks
+    # for the next best once per frame. The driver is a class attribute because moderngl_window
+    # builds the window config itself, so it cannot be handed over through the constructor.
     live_offscreen_size = None
-    live = None
+    driver = None
 
     def __init__(self, **kwargs):
         # Runs with a window (moderngl_window supplies wnd/ctx) or without one, in which case
@@ -67,12 +45,27 @@ class ShaderRenderer(mglw.WindowConfig):
         if not self.ctx and self.wnd:
             self.ctx = self.wnd.ctx
             
-        self.quad_vertices = QUAD_VERTICES
+        self.quad_vertices = np.array([
+            # x, y, u, v
+            -1.0,  1.0, 0.0, 1.0,
+            -1.0, -1.0, 0.0, 0.0,
+            1.0,  1.0, 1.0, 1.0,
+            1.0, -1.0, 1.0, 0.0,
+        ], dtype='f4')
 
         self.vbo = self.ctx.buffer(self.quad_vertices)
         
         # Shared vertex shader that provides FragCoord to the fragment shader
-        self.vert_shader = VERT_SHADER
+        self.vert_shader = """
+            #version 330
+            in vec2 in_vert;
+            in vec2 in_texcoord;
+            out vec2 FragCoord;
+            void main() {
+                gl_Position = vec4(in_vert, 0.0, 1.0);
+                FragCoord = in_texcoord;
+            }
+        """
 
         # Simple shader for the target image widget
         self.image_frag = """
@@ -88,6 +81,7 @@ class ShaderRenderer(mglw.WindowConfig):
         self.shader_prog = None
         self.shader_vao = None
         self.image_prog = self.ctx.program(vertex_shader=self.vert_shader, fragment_shader=self.image_frag)
+        # https://moderngl.readthedocs.io/en/5.8.2/topics/buffer_format.html#example-of-simple-usage
         self.image_vao = self.ctx.vertex_array(self.image_prog, [
             (self.vbo, '2f 2f', 'in_vert', 'in_texcoord')
         ])
@@ -100,9 +94,6 @@ class ShaderRenderer(mglw.WindowConfig):
         if self.offscreen_size:
             width, height = self.offscreen_size
             self.fbo = self.ctx.framebuffer([self.ctx.texture((width, height), 4)])
-        
-        if ShaderRenderer.initial_shader:
-            self.update_shader(ShaderRenderer.initial_shader)
             
         if ShaderRenderer.initial_target:
             self.load_target_image(ShaderRenderer.initial_target)
@@ -181,25 +172,17 @@ class ShaderRenderer(mglw.WindowConfig):
             self.image_prog['target_image'].value = unit
         self.image_vao.render(moderngl.TRIANGLE_STRIP)
 
-    def _advance_ga(self):
-        """Drive the live run one generation and show its current best."""
-        live = ShaderRenderer.live
-        if live["done"]:
-            return
-        glsl = live["step"](self)
-        if glsl is None:
-            # The run is over; the winner already compiled stays on screen.
-            live["done"] = True
-            return
-        self.update_shader(glsl)
-
     def on_render(self, time, frame_time):
-        if ShaderRenderer.live is not None:
-            # Scoring binds the offscreen framebuffer, so take the window's back before drawing.
-            self._advance_ga()
+        if ShaderRenderer.driver is not None:
+            # One generation per frame; ``None`` means the run is over, so the winner stays on
+            # screen. Scoring binds the offscreen framebuffer, so take the window's back before
+            # drawing.
+            glsl = ShaderRenderer.driver.advance(self)
+            if glsl is not None:
+                self.update_shader(glsl)
             self.ctx.screen.use()
 
-        self.ctx.clear(0.1, 0.1, 0.1)
+        self.ctx.clear()
         
         # Get current window size
         width, height = self.wnd.size if self.wnd else self.fbo.size
@@ -221,7 +204,7 @@ class ShaderRenderer(mglw.WindowConfig):
         if self.fbo is None:
             raise RuntimeError("render_pixels() needs an offscreen_size; this renderer has a window.")
         self.fbo.use()
-        self.ctx.clear(0.0, 0.0, 0.0, 0.0)
+        self.ctx.clear()
         self.ctx.viewport = (0, 0, self.fbo.width, self.fbo.height)
         self.draw_shader(time)
         return self._read_pixels()
@@ -247,18 +230,17 @@ def create_context():
     return moderngl.create_standalone_context()
 
 
-def run_live(step, target_image_path=None, resolution=256):
-    """Show the two-widget window and let ``step`` drive the run, one call per frame.
+def run_live(driver, target_image_path=None, resolution=256):
+    """Show the two-widget window and let ``driver`` drive the run, one call per frame.
 
-    ``step`` is handed this renderer on the GL thread with the window's context current, so a
-    candidate can be scored offscreen and read back exactly as in a headless run. It returns the
-    GLSL of the individual to display, or ``None`` once the run is over, after which the window
-    keeps showing the last result until it is closed.
+    ``driver.advance(renderer)`` is handed this renderer on the GL thread with the window's
+    context current, so a candidate can be scored offscreen and read back exactly as in a
+    headless run. It returns the GLSL of the individual to display, or ``None`` once the run is
+    over, after which the window keeps showing the last result until it is closed.
     """
     ShaderRenderer.live_offscreen_size = (resolution, resolution)
-    ShaderRenderer.initial_shader = ""
     ShaderRenderer.initial_target = target_image_path
-    ShaderRenderer.live = {"step": step, "done": False}
+    ShaderRenderer.driver = driver
 
     original_argv = sys.argv
     sys.argv = [sys.argv[0]]
@@ -266,5 +248,6 @@ def run_live(step, target_image_path=None, resolution=256):
         mglw.run_window_config(ShaderRenderer)
     finally:
         sys.argv = original_argv
-        ShaderRenderer.live = None
+        ShaderRenderer.driver = None
         ShaderRenderer.live_offscreen_size = None
+        ShaderRenderer.initial_target = None
