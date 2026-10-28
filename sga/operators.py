@@ -41,8 +41,7 @@ def mutate_parameters(individual, indpb, sigma, reset_probability):
 
     - re-drawn uniformly over [0, 1], shader-gen's operator, which can move a gene anywhere in
       one step and so lets the search leave a converged basin; or
-    - nudged by Gaussian noise of standard deviation ``sigma``, which refines a point that is
-      already close without throwing away the progress around it.
+    - nudged by Gaussian noise of scale ``sigma``.
 
     With ``reset_probability`` at 1.0 this is exactly shader-gen's mutation.
     """

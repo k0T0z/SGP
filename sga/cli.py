@@ -51,7 +51,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import renderer  # noqa: E402
-from .evaluation import Evaluator
+from .evaluation import Evaluator, ink_mask
 from .evolution import plot_fitness, run_ga, run_ga_steps
 from .graph import SAMPLE_GRAPH, GraphBuilder, parse_graph
 from .operators import build_toolbox
@@ -116,9 +116,9 @@ def _print_run_info(args, specs, target_pixels):
           f"{sum(s['kind'] == 'discrete' for s in specs)} discrete.")
     print(f"Population: {args.population}, generations: {args.generations}, "
           f"target: {args.target} @ {args.resolution}x{args.resolution}.")
-    print(f"Target ink: {int((target_pixels[..., 3] > 0).sum())} of "
+    print(f"Target ink: {int(ink_mask(target_pixels).sum())} of "
           f"{args.resolution * args.resolution} pixels at {args.resolution}x{args.resolution} "
-          f"(an empty render scores 1.0, a pixel-identical render 0.0).")
+          f"(an empty render scores 1.0, a matching silhouette 0.0).")
 
 
 def _shaders_dir(args):

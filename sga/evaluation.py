@@ -27,14 +27,16 @@
 
 """The fitness function.
 
-Matching the target means drawing the same channels, in the same places. A candidate is scored
-by the mean squared error between its render and the target, taken over every pixel and all
-four ``(H, W, 4)`` channels (alpha, red, green, blue), and is minimised:
+Matching the target means drawing its ink in the same places. A candidate is scored by the
+intersection over union (IoU) between the ink mask of its render and the ink mask of the
+target, and is minimised:
 
-    0.0  the render is pixel-identical to the target
+    0.0  the render's ink covers exactly the target's ink
+    1.0  the render's ink does not overlap the target's ink at all
 
-Because every channel of every pixel contributes, the search has a slope everywhere rather
-than only where ink happens to overlap.
+The masks are taken from pixel brightness, so a uniform fill scores no better than it deserves:
+unlike the mean squared error it replaces, painting the frame with the target's average colour
+is not a way to score well, because the average colour is not ink.
 """
 
 import numpy as np
@@ -45,10 +47,23 @@ from .runtime import shader_gen_py
 # real score, so invalid individuals always sort last.
 PENALTY = 1e9
 
-def mse(image, target) -> float:
-    """Mean squared error over the ARGB channels of two top-down (H, W, 4) uint8 arrays."""
-    difference = image.astype(np.float64) - target.astype(np.float64)
-    return float(np.mean(difference * difference))
+# A pixel counts as ink once its brightness clears this (of 255). The target is a hard
+# silhouette, so a mid-range cut separates its ink from its background cleanly.
+INK_THRESHOLD = 127
+
+
+def ink_mask(image):
+    """The binary silhouette of a top-down (H, W, 4) uint8 array: pixels brighter than the cut."""
+    brightness = image[..., :3].mean(axis=2)
+    return brightness > INK_THRESHOLD
+
+
+def iou(a, b) -> float:
+    """Intersection over union of two boolean masks. Two empty masks count as identical."""
+    union = np.count_nonzero(a | b)
+    if union == 0:
+        return 1.0
+    return float(np.count_nonzero(a & b) / union)
 
 
 class Evaluator:
@@ -61,7 +76,7 @@ class Evaluator:
     def __init__(self, builder, scene, target):
         self.builder = builder
         self.scene = scene
-        self.target = target
+        self.target_ink = ink_mask(target)
         self.cache = {}
 
     def __call__(self, individual):
@@ -82,4 +97,4 @@ class Evaluator:
         except Exception:
             # The GA routinely produces parameter combinations whose shader fails to compile.
             return PENALTY
-        return mse(image, self.target)
+        return 1.0 - iou(ink_mask(image), self.target_ink)
