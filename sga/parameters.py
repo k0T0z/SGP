@@ -55,20 +55,20 @@ def get_range(node_type: int, field_number: int):
 
 
 def build_gene_specs(nodes):
-    """One gene per declared (node, field) pair, in node order.
+    """One gene per declared (node id, field) pair, in node order.
 
-    ``nodes`` is the node-token list from :func:`sga.graph.parse_graph`. Each spec records
-    which token it rewrites (``node``/``offset``), the range it is drawn from, and the index
-    of its gene in the individual.
+    ``nodes`` is the node-token list from :func:`sga.graph.parse_graph`. A spec is identified by
+    its node id and field number and records the range it is drawn from; its gene index is its
+    position in the returned list.
     """
     specs = []
-    for node_index, tokens in enumerate(nodes):
+    for tokens in nodes:
+        node_id = int(tokens[1])
         node_type = int(tokens[2])
-        for offset, parameter in enumerate(tokens[3:]):
+        for parameter in tokens[3:]:
             field_number = int(parameter.split("=")[0])
             kind, limits = get_range(node_type, field_number)
-            spec = {"gene": len(specs), "node": node_index, "offset": offset,
-                    "field": field_number, "kind": kind}
+            spec = {"node": node_id, "field": field_number, "kind": kind}
             if kind == "discrete":
                 spec["values"] = limits
             else:

@@ -83,17 +83,21 @@ class GraphBuilder:
     def __init__(self, nodes, connections, specs):
         self.nodes = [list(tokens) for tokens in nodes]
         self.connections = [list(tokens) for tokens in connections]
-        self.by_node = {}
-        for spec in specs:
-            self.by_node.setdefault(spec["node"], []).append(spec)
+        self.specs = specs
+        self.node_by_id = {int(tokens[1]): index for index, tokens in enumerate(self.nodes)}
+        self.offset_by_field = {}
+        for node_id, index in self.node_by_id.items():
+            for offset, parameter in enumerate(self.nodes[index][3:]):
+                self.offset_by_field[(node_id, int(parameter.split("=")[0]))] = offset
 
     def __call__(self, individual) -> str:
         nodes = [list(tokens) for tokens in self.nodes]
-        for node_index, node_specs in self.by_node.items():
-            tokens = nodes[node_index]
-            for spec in node_specs:
-                value = gene_to_value(spec, individual[spec["gene"]])
-                tokens[3 + spec["offset"]] = f"{spec['field']}={format_value(spec, value)}"
+        for gene, spec in enumerate(self.specs):
+            node_id, field = spec["node"], spec["field"]
+            value = gene_to_value(spec, individual[gene])
+            offset = self.offset_by_field[(node_id, field)]
+            node_index = self.node_by_id[node_id]
+            nodes[node_index][3 + offset] = f"{field}={format_value(spec, value)}"
         entities = [";".join(tokens) for tokens in nodes]
         entities += [";".join(tokens) for tokens in self.connections]
         return ",".join(entities)
