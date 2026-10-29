@@ -81,6 +81,7 @@ def parse_args(argv=None):
                              "shader-gen's own value (ai-agent/parameters.cpp); the previous 0.5 "
                              "re-rolled roughly ten of the nineteen genes per child and threw "
                              "away most of what a candidate had already matched.")
+                             
     parser.add_argument("--mutation-sigma", type=float, default=0.1,
                         help="Standard deviation of the local Gaussian gene perturbation at the "
                              "start of the run, as a fraction of each parameter's range. A blind "

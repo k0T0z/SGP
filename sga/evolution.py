@@ -113,7 +113,7 @@ def run_ga_steps(toolbox, evaluate, args, on_generation=None):
         record = stats.compile(population)
         logbook.record(gen=generation, nevals=len(invalid), sigma=sigma, **record)
         # Only the new row: logbook.stream would re-print every earlier generation too.
-        print(f"gen {generation:>4}  nevals {len(invalid):>4}  sigma {sigma:.2e}  "
+        print(f"gen {generation:>4}/{args.generations}  nevals {len(invalid):>4}  sigma {sigma:.2e}  "
               f"min {record['min']:.6f}  avg {record['avg']:.6f}", flush=True)
         yield generation, record, hof[0]
 
