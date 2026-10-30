@@ -54,7 +54,7 @@ import renderer  # noqa: E402
 from .evaluation import Evaluator, ink_mask
 from .evolution import plot_fitness, run_ga, run_ga_steps
 from .graph import SAMPLE_GRAPH, GraphBuilder, parse_graph
-from .operators import build_toolbox
+from .operators import build_toolbox, report_operator_stats
 from .parameters import build_gene_specs
 from .runtime import shader_gen_py
 
@@ -102,6 +102,10 @@ def parse_args(argv=None):
     parser.add_argument("--tournament-size", type=int, default=3, help="Tournament selection size.")
     parser.add_argument("--blend-alpha", type=float, default=0.5, help="cxBlend alpha.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
+    parser.add_argument("--stats", action="store_true", default=False,
+                        help="Print the gene table and a probe of what crossover and mutation "
+                             "do to each gene (bucket changes, overshoot, clamp rate) before "
+                             "the run starts.")
 
     parser.add_argument("--show-renderer", dest="show_renderer", action="store_true", default=False,
                         help="Show the two-widget window while the algorithm runs: one generation "
@@ -182,7 +186,7 @@ def _run_headless(args, builder, specs) -> int:
     _print_run_info(args, specs, scene.target_pixels)
 
     evaluator = Evaluator(builder, scene, scene.target_pixels)
-    toolbox = build_toolbox(evaluator, len(specs), args)
+    toolbox = build_toolbox(evaluator, specs, args)
 
     def write_generation(generation, best):
         status, glsl = shader_gen_py.generate_shader(builder(best))
@@ -228,7 +232,7 @@ class LiveDriver:
                 return None
             _print_run_info(self.args, self.specs, scene.target_pixels)
             evaluator = Evaluator(self.builder, scene, scene.target_pixels)
-            self.steps = run_ga_steps(build_toolbox(evaluator, len(self.specs), self.args),
+            self.steps = run_ga_steps(build_toolbox(evaluator, self.specs, self.args),
                                       evaluator, self.args)
 
         try:
@@ -279,6 +283,9 @@ def main() -> int:
 
     builder = GraphBuilder(nodes, connections, specs)
     _clear_generation_shaders(args)
+
+    if args.stats:
+        report_operator_stats(specs, args)
 
     if args.show_renderer:
         return _run_live(args, builder, specs)

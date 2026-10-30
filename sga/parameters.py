@@ -77,13 +77,23 @@ def build_gene_specs(nodes):
     return specs
 
 
+def gene_to_index(spec, unit: float):
+    """The bucket a discrete gene selects, or ``None`` for a continuous gene.
+
+    The single source of truth for the discrete mapping: :func:`gene_to_value` decodes through
+    it, so the two can never disagree.
+    """
+    if spec["kind"] != "discrete":
+        return None
+    unit = min(1.0, max(0.0, unit))
+    return min(int(unit * len(spec["values"])), len(spec["values"]) - 1)
+
+
 def gene_to_value(spec, unit: float):
     """Map a gene in [0, 1] onto the range the spec declares."""
-    unit = min(1.0, max(0.0, unit))
     if spec["kind"] == "discrete":
-        values = spec["values"]
-        index = min(int(unit * len(values)), len(values) - 1)
-        return values[index]
+        return spec["values"][gene_to_index(spec, unit)]
+    unit = min(1.0, max(0.0, unit))
     return spec["lo"] + unit * (spec["hi"] - spec["lo"])
 
 
