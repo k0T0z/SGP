@@ -28,8 +28,13 @@
 """The encoded graph format and the fixed topology the GA works on.
 
 An encoded graph is a comma separated list of entities, each semicolon separated:
-  - Nodes:       ``0;<node_id>;<oneof_value_field_number>;<field_number>=<value>;...``
+  - Nodes:       ``0;<node_id>;<oneof_value_field_number>;<field>=<value>;...``
   - Connections: ``1;<connection_id>;<from_node_id>;<from_port>;<to_node_id>;<to_port>``
+
+A node parameter's key is a single field number for scalar fields (``5=1``), or a
+``<field_number>:<row>:<column>`` triple for a repeated-field entry such as a gradient stop
+(``10:0:1=0`` means gradient field 10, row 0, channel 1). Both forms are rebuilt from genes; the
+key is carried through the graph string verbatim.
 """
 
 from .parameters import format_value, gene_to_value
@@ -38,34 +43,25 @@ from .parameters import format_value, gene_to_value
 # parameter values are replaced by the individual's genes.
 SAMPLE_GRAPH = (
     "0;0;3,"
-    "0;1;2;1=1,"
-    "0;2;22;1=7;2=50,"
-    "0;3;21;1=10,"
-    "0;4;2;1=1,"
-    "0;5;12;1=10,"
-    "0;6;8;1=50;2=100;3=0;4=255,"
-    "0;7;22;1=10;2=60,"
-    "0;8;8;1=60;2=100;3=0;4=255,"
-    "0;9;12;1=5,"
-    "0;11;16;1=16,"
-    "0;12;12;1=7,"
-    "0;13;29,"
-    "0;14;4;1=1,"
-    "1;0;1;0;2;0,"
-    "1;1;4;0;3;0,"
-    "1;2;6;0;5;0,"
-    "1;3;2;0;5;1,"
-    "1;4;5;0;7;0,"
-    "1;5;3;0;9;0,"
-    "1;6;8;0;9;1,"
-    "1;13;12;0;11;0,"
-    "1;11;7;0;12;0,"
-    "1;12;9;0;12;1,"
-    "1;14;11;0;13;0,"
-    "1;15;11;0;13;1,"
-    "1;16;11;0;13;2,"
-    "1;17;14;0;13;3,"
-    "1;18;13;0;0;0"
+    "0;1;49;1=0;2=2;3=0;4=0;5=1;6=0;7=16;8=false;9=true;"
+    "10:0:1=0;10:0:2=0;10:0:3=0;10:0:4=0;10:0:5=1;10:1:1=1;10:1:2=1;10:1:3=1;10:1:4=1;10:1:5=1,"
+    "0;2;21;1=5;2=5;3=1;4=0.5;5=1;6=8;7=-1;8=true;"
+    "9:0:1=0;9:0:2=0;9:0:3=0;9:0:4=0;9:0:5=1;9:1:1=1;9:1:2=1;9:1:3=1;9:1:4=1;9:1:5=1,"
+    "0;3;2;1=1,"
+    "0;4;42;1=7;2=1;3=false,"
+    "0;5;46;1=4;2=6;3=0.5;4=0.10000000149011612;5=0.029999999329447746;"
+    "6=0.029999999329447746;7=0.05000000074505806;8=true;"
+    "9:0:1=0;9:0:2=0;9:0:3=0;9:0:4=0;9:0:5=1;9:1:1=0.5;9:1:2=0.5;9:1:3=0.5;9:1:4=0.5;9:1:5=1;"
+    "9:2:1=1;9:2:2=0;9:2:3=0;9:2:4=1;9:2:5=1,"
+    "0;6;42;1=7;2=1;3=false,"
+    "1;0;3;0;1;0,"
+    "1;1;3;0;2;0,"
+    "1;2;1;0;4;0,"
+    "1;3;2;0;4;1,"
+    "1;4;3;0;5;0,"
+    "1;5;4;0;6;0,"
+    "1;6;5;0;6;1,"
+    "1;7;6;0;0;0"
 )
 
 
@@ -91,19 +87,21 @@ class GraphBuilder:
         self.connections = [list(tokens) for tokens in connections]
         self.specs = specs
         self.node_by_id = {int(tokens[1]): index for index, tokens in enumerate(self.nodes)}
+        # Keys are the raw parameter keys, so scalar (``5``) and repeated-field (``0:1``) entries
+        # both resolve without being coerced to an int.
         self.offset_by_field = {}
         for node_id, index in self.node_by_id.items():
             for offset, parameter in enumerate(self.nodes[index][3:]):
-                self.offset_by_field[(node_id, int(parameter.split("=")[0]))] = offset
+                self.offset_by_field[(node_id, parameter.split("=")[0])] = offset
 
     def __call__(self, individual) -> str:
         nodes = [list(tokens) for tokens in self.nodes]
         for gene, spec in enumerate(self.specs):
-            node_id, field = spec["node"], spec["field"]
+            node_id, key = spec["node"], spec["key"]
             value = gene_to_value(spec, individual[gene])
-            offset = self.offset_by_field[(node_id, field)]
+            offset = self.offset_by_field[(node_id, key)]
             node_index = self.node_by_id[node_id]
-            nodes[node_index][3 + offset] = f"{field}={format_value(spec, value)}"
+            nodes[node_index][3 + offset] = f"{key}={format_value(spec, value)}"
         entities = [";".join(tokens) for tokens in nodes]
         entities += [";".join(tokens) for tokens in self.connections]
         return ",".join(entities)

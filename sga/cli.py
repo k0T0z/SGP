@@ -28,9 +28,9 @@
 """Command line entry point.
 
 Crossover and elitism default to shader-gen's ``Parameters``. Population, generations and the
-mutation operator do not, because the search here runs over a fixed topology: 19 genes, three
-of them driving chaotic noise fields, so the fitness surface is rugged and the basin around a
-good answer is narrow. The defaults therefore spend more samples (``--population``,
+mutation operator do not, because the search here runs over a fixed topology: 67 genes, covering
+procedural noise, pattern and blend fields as well as their gradient stops, so the fitness surface
+is rugged and the basin around a good answer is narrow. The defaults therefore spend more samples (``--population``,
 ``--generations``) and nudge far more gently than shader-gen's full-range re-draw: a Gaussian
 perturbation annealed from ``--mutation-sigma`` down to ``--mutation-sigma-final``, applied at
 shader-gen's per-gene ``--mutation-probability``, with a small ``--reset-probability`` leaving
@@ -69,7 +69,7 @@ def parse_args(argv=None):
                         help="Directory for the saved artifacts.")
 
     parser.add_argument("--population", type=int, default=200,
-                        help="Population size. Doubled over shader-gen's 100: the space is 19 "
+                        help="Population size. Doubled over shader-gen's 100: the space is 67 "
                              "dimensional and rugged, so more samples per generation buy a better "
                              "chance of landing near a good basin.")
     parser.add_argument("--generations", type=int, default=1000,

@@ -204,7 +204,7 @@ def report_operator_stats(specs, args, trials=20000, seed=0):
 
     print("\nGene table:")
     for i, spec in enumerate(specs):
-        print(f"  gene {i:>2}  node {spec['node']:>2}  field {spec['field']:>2}  {describe_spec(spec)}")
+        print(f"  gene {i:>2}  node {spec['node']:>2}  field {spec['key']:>3}  {describe_spec(spec)}")
 
     overshoot = [0] * n
     clamped = [0] * n

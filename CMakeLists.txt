@@ -106,7 +106,7 @@ target_include_directories(sgp_proto PUBLIC
 set(SGP_GENERATOR_SOURCES
     ${SGP_SHADER_GEN_ROOT}/generator/visual_shader_generator.cpp
     ${SGP_SHADER_GEN_ROOT}/generator/visual_shader_node_generators.cpp
-    ${SGP_SHADER_GEN_ROOT}/generator/vs_node_noise_generators.cpp
+    ${SGP_SHADER_GEN_ROOT}/generator/vs_node_pattern_generators.cpp
     ${SGP_SHADER_GEN_ROOT}/generator/visual_shader_node_port_type_generator.cpp
 )
 

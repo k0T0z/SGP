@@ -56,8 +56,8 @@ double as_double(const ai_agent_utils::ContinuousRangeVariant& bound) {
   return std::visit([](const auto& value) { return static_cast<double>(value); }, bound);
 }
 
-py::object get_continuous_range(const int node_type, const int field_number) {
-  const auto range = ai_agent_utils::get_range_for_continuous_field(node_type, field_number);
+py::object get_continuous_range(const int node_type, const int field_number, const int sub_field) {
+  const auto range = ai_agent_utils::get_range_for_continuous_field(node_type, field_number, sub_field);
   const double lower = as_double(range.first);
   const double upper = as_double(range.second);
   if (lower == 0.0 && upper == 0.0) return py::none();
@@ -88,7 +88,10 @@ PYBIND11_MODULE(shader_gen_py, m) {
   // The mutation ranges live in shader-gen (`ai-agent/utils/utils.hpp`); re-exporting them keeps
   // the search ranges in step with the generator instead of duplicated on the Python side.
   m.def("get_continuous_range", &get_continuous_range, py::arg("node_type"), py::arg("field_number"),
+        py::arg("sub_field") = -1,
         "shader-gen's mutation range for a continuous field, as (lower, upper).\n\n"
+        "`sub_field` identifies a field inside a repeated message (a `ColorGradientStop`), so a "
+        "gradient stop is addressed by its node's gradient field number plus the stop's column.\n\n"
         "Returns None when shader-gen declares no range for the (node type, field number) pair.");
   m.def("get_discrete_range", &get_discrete_range, py::arg("node_type"), py::arg("field_number"),
         "shader-gen's mutation values for a discrete field.\n\n"

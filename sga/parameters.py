@@ -30,45 +30,58 @@
 The ranges are not listed here: they are read from shader-gen's own
 ``ai_agent_utils::get_range_for_continuous_field`` / ``get_range_for_discrete_field``
 (``ai-agent/utils/utils.hpp``) through the python extension, so the search follows shader-gen
-rather than a copy of it that can drift. Fields are addressed by the oneof value field number
-of the ``VisualShaderNode`` message, exactly as in the encoded graph format.
+rather than a copy of it that can drift. Scalar fields are addressed by the oneof value field
+number of the ``VisualShaderNode`` message, exactly as in the encoded graph format. A repeated
+``ColorGradientStop`` entry is encoded as ``<field_number>:<row>:<column>``; it is addressed by
+the field number and column carried in the key itself.
 """
 
 from .runtime import shader_gen_py
 
-def get_range(node_type: int, field_number: int):
+def get_range(node_type: int, field_number: int, sub_field: int = -1):
     """Return ``('discrete', [values])`` or ``('continuous', (lo, hi))`` for a node field.
 
     Discrete ranges take precedence over continuous ones, mirroring
-    ``ai_agent_utils::get_range_for_field``.
+    ``ai_agent_utils::get_range_for_field``. ``sub_field`` addresses a field inside a repeated
+    message (a ``ColorGradientStop``), so a ``<field_number>:<row>:<column>`` key passes the column
+    here. Returns ``None`` when shader-gen declares no range, in which case the field is not a gene
+    and is carried through the graph unchanged.
     """
     values = shader_gen_py.get_discrete_range(node_type, field_number)
     if values:
         return "discrete", list(values)
-    limits = shader_gen_py.get_continuous_range(node_type, field_number)
+    limits = shader_gen_py.get_continuous_range(node_type, field_number, sub_field)
     if limits is None:
-        raise ValueError(
-            f"shader-gen declares no mutation range for node type {node_type}, "
-            f"field {field_number}."
-        )
+        return None
     return "continuous", (limits[0], limits[1])
 
 
 def build_gene_specs(nodes):
-    """One gene per declared (node id, field) pair, in node order.
+    """One gene per declared parameter, in node order.
 
     ``nodes`` is the node-token list from :func:`sga.graph.parse_graph`. A spec is identified by
-    its node id and field number and records the range it is drawn from; its gene index is its
-    position in the returned list.
+    its node id and its encoded key and records the range it is drawn from; its gene index is its
+    position in the returned list. A key is a scalar field number (``5``) or a repeated-field
+    ``<field_number>:<row>:<column>`` triple (``10:0:1``).
+
+    Parameters for which shader-gen declares no range are skipped and left at their encoded value.
     """
     specs = []
     for tokens in nodes:
         node_id = int(tokens[1])
         node_type = int(tokens[2])
         for parameter in tokens[3:]:
-            field_number = int(parameter.split("=")[0])
-            kind, limits = get_range(node_type, field_number)
-            spec = {"node": node_id, "field": field_number, "kind": kind}
+            key = parameter.split("=")[0]
+            parts = key.split(":")
+            if len(parts) == 3:
+                field_number, _row, column = (int(part) for part in parts)
+                found = get_range(node_type, field_number, column)
+            else:
+                found = get_range(node_type, int(key))
+            if found is None:
+                continue
+            kind, limits = found
+            spec = {"node": node_id, "key": key, "kind": kind}
             if kind == "discrete":
                 spec["values"] = limits
             else:

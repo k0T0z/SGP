@@ -42,7 +42,7 @@ The extension lands in `build/python/` next to the protobuf/abseil DLLs it needs
 ### The shader-gen submodule
 
 `SGP_SHADER_GEN_ROOT` defaults to `externals/shader-gen`, and that default is what the build
-uses — no flag is needed. The submodule is pinned to shader-gen `master-qt6` (`abe102e`),
+uses — no flag is needed. The submodule is pinned to shader-gen `master-qt6` (`3149944`),
 which carries the Qt-free refactor the sources require: `generator/graph_string_utils.hpp`,
 `proto_node.hpp`, `proto_node_factory.hpp`, `port_type_generator_factory.hpp`, and the
 Qt-free `ai-agent/utils/utils.hpp` that `get_continuous_range` / `get_discrete_range` are
@@ -59,12 +59,18 @@ status, glsl = shader_gen_py.generate_shader(graph)
 ```
 
 - `graph` — a comma separated list of entities where every entity is semicolon separated:
-  - Nodes: `"0;<node_id>;<oneof_value_field_number>;<field_number>=<value>;..."`
+  - Nodes: `"0;<node_id>;<oneof_value_field_number>;<field_key>=<value>;..."`
   - Connections: `"1;<connection_id>;<from_node_id>;<from_port_index>;<to_node_id>;<to_port_index>"`
+
+  A node parameter's key is a scalar field number (`5`) or, for a repeated `ColorGradientStop`
+  entry, `<field_number>:<row>:<column>` (`10:0:1` means gradient field 10, stop 0, channel 1).
 - `generate_shader` returns `(status, glsl)`: shader-gen reports its result through a
   `std::string&` out-parameter, which has no Python equivalent, so `status` mirrors the C++
   return value and `glsl` is the buffer.
 - `generate_preview_shader(graph, node_id, port)` generates GLSL for a single output port.
-- `get_continuous_range(node_type, field_number)` / `get_discrete_range(node_type, field_number)`
-  re-export shader-gen's mutation ranges (`ai-agent/utils/utils.hpp`) so the search does not
-  keep its own copy of them: a `(lower, upper)` pair or `None`, and a list of values or `[]`.
+- `get_continuous_range(node_type, field_number, sub_field=-1)` /
+  `get_discrete_range(node_type, field_number)` re-export shader-gen's mutation ranges
+  (`ai-agent/utils/utils.hpp`) so the search does not keep its own copy of them: a `(lower, upper)`
+  pair or `None`, and a list of values or `[]`. For a repeated `ColorGradientStop` entry the field
+  number and column are read from the encoded key (`<field_number>:<row>:<column>`), and the column
+  is passed as `sub_field`.
