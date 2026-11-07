@@ -131,7 +131,7 @@ def plot_fitness(logbook, path):
     ax.plot(generations, logbook.select("min"), label="best")
     ax.plot(generations, logbook.select("avg"), label="average")
     ax.set_xlabel("generation")
-    ax.set_ylabel("fitness (1.0 = empty render, 0.0 = identical to target)")
+    ax.set_ylabel("fitness (RGBA MSE)")
     ax.set_title("SGP - DEAP genetic algorithm")
     ax.legend()
     fig.tight_layout()

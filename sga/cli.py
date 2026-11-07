@@ -51,7 +51,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import renderer  # noqa: E402
-from .evaluation import Evaluator, ink_mask
+from .evaluation import Evaluator
 from .evolution import plot_fitness, run_ga, run_ga_steps
 from .graph import SAMPLE_GRAPH, GraphBuilder, parse_graph
 from .operators import build_toolbox, report_operator_stats
@@ -114,16 +114,14 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _print_run_info(args, specs, target_pixels):
-    """The run's parameters, and what the target looks like at the size it is compared at."""
+def _print_run_info(args, specs):
+    """The run's parameters and the fitness definition."""
     print(f"Optimising {len(specs)} parameters: "
           f"{sum(s['kind'] == 'continuous' for s in specs)} continuous, "
           f"{sum(s['kind'] == 'discrete' for s in specs)} discrete.")
     print(f"Population: {args.population}, generations: {args.generations}, "
           f"target: {args.target} @ {args.resolution}x{args.resolution}.")
-    print(f"Target ink: {int(ink_mask(target_pixels).sum())} of "
-          f"{args.resolution * args.resolution} pixels at {args.resolution}x{args.resolution} "
-          f"(an empty render scores 1.0, a matching silhouette 0.0).")
+    print("Fitness: mean squared error over all four channels (RGBA).")
 
 
 def _shaders_dir(args):
@@ -183,7 +181,7 @@ def _run_headless(args, builder, specs) -> int:
         print(f"Could not read the target image {args.target!r}.", file=sys.stderr)
         return 1
 
-    _print_run_info(args, specs, scene.target_pixels)
+    _print_run_info(args, specs)
 
     evaluator = Evaluator(builder, scene, scene.target_pixels)
     toolbox = build_toolbox(evaluator, specs, args)
@@ -230,7 +228,7 @@ class LiveDriver:
                 self.failed = True
                 self.done = True
                 return None
-            _print_run_info(self.args, self.specs, scene.target_pixels)
+            _print_run_info(self.args, self.specs)
             evaluator = Evaluator(self.builder, scene, scene.target_pixels)
             self.steps = run_ga_steps(build_toolbox(evaluator, self.specs, self.args),
                                       evaluator, self.args)

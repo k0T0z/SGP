@@ -9,11 +9,15 @@ def _vertex_array(ctx, program, vbo):
     """Bind the quad, skipping attributes the driver optimised away.
 
     A generated shader that never reads FragCoord lets the compiler drop ``in_texcoord``, and
-    moderngl raises when asked to bind an attribute the program does not have.
+    moderngl raises when asked to bind an attribute the program does not have. The buffer is
+    still the interleaved ``x, y, u, v`` layout, so when ``in_texcoord`` is gone the binding has
+    to pad past the missing 8 bytes instead of shrinking the stride to 8: dropping the attribute
+    without the padding makes the driver read one vertex's texture coordinates as the next
+    vertex, which draws a clipped, misplaced quad.
     """
     if program.get('in_texcoord', None) is not None:
         return ctx.vertex_array(program, [(vbo, '2f 2f', 'in_vert', 'in_texcoord')])
-    return ctx.vertex_array(program, [(vbo, '2f', 'in_vert')])
+    return ctx.vertex_array(program, [(vbo, '2f 8x', 'in_vert')])
 
 
 class ShaderRenderer(mglw.WindowConfig):
