@@ -38,6 +38,24 @@ the field number and column carried in the key itself.
 
 from .runtime import shader_gen_py
 
+# Fields the GA must never mutate, even though shader-gen declares a range for them. Node type is the
+# ``VisualShaderNode`` oneof value field number (visual_shader.proto); the field is the message's own
+# field number. Colour alpha carries no signal for the reference image to optimise against, and the
+# Input node's type only offers INPUT_TYPE_UV for now.
+EXCLUDED_FIELDS = frozenset({
+    (8, 4),    # ColorConstant.a
+    (11, 4),   # Vec4Constant.w
+    (42, 2),   # Blend.opacity
+    (42, 3),   # Blend.inv_alpha
+    (2, 1),    # Input.type
+})
+
+# A ColorGradientStop keeps alpha in its ``a`` channel (field 5), so every gradient node encodes it as
+# the ``<field_number>:<row>:5`` column. shader-gen shares one 0..255 range across r/g/b/a, so the
+# column is the only thing that tells alpha apart from the colour channels.
+ALPHA_GRADIENT_COLUMN = 5
+
+
 def get_range(node_type: int, field_number: int, sub_field: int = -1):
     """Return ``('discrete', [values])`` or ``('continuous', (lo, hi))`` for a node field.
 
@@ -64,7 +82,8 @@ def build_gene_specs(nodes):
     position in the returned list. A key is a scalar field number (``5``) or a repeated-field
     ``<field_number>:<row>:<column>`` triple (``10:0:1``).
 
-    Parameters for which shader-gen declares no range are skipped and left at their encoded value.
+    Parameters for which shader-gen declares no range are skipped and left at their encoded value,
+    as are the fields in ``EXCLUDED_FIELDS`` and every gradient's alpha column.
     """
     specs = []
     for tokens in nodes:
@@ -75,8 +94,12 @@ def build_gene_specs(nodes):
             parts = key.split(":")
             if len(parts) == 3:
                 field_number, _row, column = (int(part) for part in parts)
+                if column == ALPHA_GRADIENT_COLUMN:
+                    continue
                 found = get_range(node_type, field_number, column)
             else:
+                if (node_type, int(key)) in EXCLUDED_FIELDS:
+                    continue
                 found = get_range(node_type, int(key))
             if found is None:
                 continue
