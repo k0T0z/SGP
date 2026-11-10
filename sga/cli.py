@@ -41,6 +41,7 @@ shader-gen's operator reachable.
 import argparse
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -125,23 +126,72 @@ def _print_run_info(args, specs):
     print("Fitness: mean squared error over all four channels (RGBA).")
 
 
-def _shaders_dir(args):
-    """The gitignored folder the per-generation shaders are written to."""
-    return Path(args.out_dir) / "shaders"
+# Per-run artifact folders. A run writes its per-generation best into the plain ``shader`` and
+# ``shader_image`` folders. When it finishes, its folders are aged by one step and stamped with
+# the run's finish time, and the oldest tier is archived rather than dropped, so every run is
+# kept: ``shader`` -> ``shader_latest_<ts>`` -> ``shader_pre_latest_<ts>`` -> ``shader_<ts>``.
+_SHADER_DIR = "shader"
+_SHADER_IMAGE_DIR = "shader_image"
+_RUN_ARTIFACT_DIRS = (_SHADER_DIR, _SHADER_IMAGE_DIR)
+_TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
 
-def _clear_generation_shaders(args):
-    """Wipe the per-generation shader folder so every launch starts from a clean slate."""
-    shaders_dir = _shaders_dir(args)
-    if shaders_dir.is_dir():
-        shutil.rmtree(shaders_dir)
+def _artifact_dir(args, name):
+    return Path(args.out_dir) / name
 
 
-def _save_generation_shader(args, generation, glsl):
-    """Write one generation's best shader into the gitignored ``shaders`` folder."""
-    shaders_dir = _shaders_dir(args)
-    shaders_dir.mkdir(parents=True, exist_ok=True)
-    (shaders_dir / f"gen_{generation:04d}.glsl").write_text(glsl, encoding="utf-8")
+def _newest(args, pattern):
+    """The most recent folder matching ``pattern`` under ``out_dir``, or ``None`` if there is none.
+
+    The names carry a ``%Y%m%d_%H%M%S`` timestamp, which sorts lexicographically, so the greatest
+    name is also the newest.
+    """
+    matches = sorted(Path(args.out_dir).glob(pattern))
+    return matches[-1] if matches else None
+
+
+def _clear_run_artifacts(args):
+    """Wipe the running run's folders so every launch starts from a clean slate."""
+    for name in _RUN_ARTIFACT_DIRS:
+        path = _artifact_dir(args, name)
+        if path.is_dir():
+            shutil.rmtree(path)
+
+
+def _save_generation_artifacts(args, generation, glsl, image):
+    """Write one generation's best shader and its render into the running run's folders."""
+    shader_dir = _artifact_dir(args, _SHADER_DIR)
+    shader_dir.mkdir(parents=True, exist_ok=True)
+    (shader_dir / f"gen_{generation:04d}.glsl").write_text(glsl, encoding="utf-8")
+
+    image_dir = _artifact_dir(args, _SHADER_IMAGE_DIR)
+    image_dir.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(image).save(image_dir / f"gen_{generation:04d}.png")
+
+
+def _rotate_run_artifacts(args):
+    """Age the finished run's folders one step, archiving the oldest tier instead of dropping it.
+
+    Each run's finish timestamp rides along with its folders as they age, so a single run is
+    ``shader`` -> ``shader_latest_<ts>`` -> ``shader_pre_latest_<ts>`` -> ``shader_<ts>`` (and
+    likewise for ``shader_image``). Renaming the oldest tier to its ``<ts>`` archive keeps every
+    past run. Called once a run has produced its result, so the shift lines up with the next run.
+    """
+    now = time.strftime(_TIMESTAMP_FORMAT)
+    for name in _RUN_ARTIFACT_DIRS:
+        pre_latest = _newest(args, f"{name}_pre_latest_*")
+        if pre_latest is not None:
+            ts = pre_latest.name[len(f"{name}_pre_latest_"):]
+            pre_latest.rename(_artifact_dir(args, f"{name}_{ts}"))
+
+        latest = _newest(args, f"{name}_latest_*")
+        if latest is not None:
+            ts = latest.name[len(f"{name}_latest_"):]
+            latest.rename(_artifact_dir(args, f"{name}_pre_latest_{ts}"))
+
+        current = _artifact_dir(args, name)
+        if current.is_dir():
+            current.rename(_artifact_dir(args, f"{name}_latest_{now}"))
 
 
 def _save_artifacts(args, builder, scene, result):
@@ -189,12 +239,15 @@ def _run_headless(args, builder, specs) -> int:
 
     def write_generation(generation, best):
         status, glsl = shader_gen_py.generate_shader(builder(best))
-        if status:
-            _save_generation_shader(args, generation, glsl)
+        if not status:
+            return
+        scene.update_shader(glsl)
+        _save_generation_artifacts(args, generation, glsl, scene.render_pixels())
 
     result = run_ga(toolbox, evaluator, args, on_generation=write_generation)
 
     best_graph, best_fitness = _save_artifacts(args, builder, scene, result)
+    _rotate_run_artifacts(args)
     _report(args, best_graph, best_fitness)
 
     return 0
@@ -238,6 +291,7 @@ class LiveDriver:
             generation, _, best = next(self.steps)
         except StopIteration as stop:
             self.artifacts = _save_artifacts(self.args, self.builder, scene, stop.value)
+            _rotate_run_artifacts(self.args)
             self.done = True
             return None
 
@@ -247,7 +301,8 @@ class LiveDriver:
             self.failed = True
             self.done = True
             return None
-        _save_generation_shader(self.args, generation, glsl)
+        scene.update_shader(glsl)
+        _save_generation_artifacts(self.args, generation, glsl, scene.render_pixels())
         return glsl
 
 
@@ -281,7 +336,7 @@ def main() -> int:
         return 1
 
     builder = GraphBuilder(nodes, connections, specs)
-    _clear_generation_shaders(args)
+    _clear_run_artifacts(args)
 
     if args.stats:
         report_operator_stats(specs, args)

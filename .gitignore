@@ -239,8 +239,14 @@ __marimo__/
 best_graph.txt
 best_shader.glsl
 
-# Per-generation best shaders written by the GA.
-shaders/
+# Per-run artifacts written by the GA: the running run's per-generation shaders and renders
+# (``shader/``, ``shader_image/``) and every finished run kept under a timestamp -- the newest as
+# ``shader_latest_<ts>``, the one before it ``shader_pre_latest_<ts>``, and older runs archived as
+# ``shader_<ts>`` (likewise for ``shader_image``).
+shader/
+shader_image/
+shader_*/
+shader_image_*/
 
 .vscode/
 
