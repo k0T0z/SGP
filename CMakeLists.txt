@@ -108,6 +108,9 @@ set(SGP_GENERATOR_SOURCES
     ${SGP_SHADER_GEN_ROOT}/generator/visual_shader_node_generators.cpp
     ${SGP_SHADER_GEN_ROOT}/generator/vs_node_pattern_generators.cpp
     ${SGP_SHADER_GEN_ROOT}/generator/visual_shader_node_port_type_generator.cpp
+    # The shader-interface contract the generated GLSL is written against. Compiled here so
+    # the bindings can hand its values to `renderer.py`.
+    ${SGP_SHADER_GEN_ROOT}/generator/renderer/shader_renderer.cpp
 )
 
 add_library(sgp_generator STATIC ${SGP_GENERATOR_SOURCES})

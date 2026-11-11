@@ -38,16 +38,28 @@ the field number and column carried in the key itself.
 
 from .runtime import shader_gen_py
 
-# Fields the GA must never mutate, even though shader-gen declares a range for them. Node type is the
-# ``VisualShaderNode`` oneof value field number (visual_shader.proto); the field is the message's own
-# field number. Colour alpha carries no signal for the reference image to optimise against, and the
-# Input node's type only offers INPUT_TYPE_UV for now.
+# Fields the GA must never mutate. Node type is the ``VisualShaderNode`` oneof value field number
+# (visual_shader.proto); the field is the message's own field number. Colour alpha carries no signal
+# for the reference image to optimise against, and the Input node's type only offers INPUT_TYPE_UV
+# for now.
+#
+# Every node that resamples its input alongside a ``Matrix3x3`` ``transformation`` carries its nine
+# entries as ``<field number>:<column>`` parameters, one field per entry. A transformation is a
+# coordinate frame rather than a scalar, so the GA leaves the identity in place.
 EXCLUDED_FIELDS = frozenset({
     (8, 4),    # ColorConstant.a
     (11, 4),   # Vec4Constant.w
     (42, 2),   # Blend.opacity
     (42, 3),   # Blend.inv_alpha
     (2, 1),    # Input.type
+    (20, 2),   # ValueNoise.transformation
+    (21, 10),  # PerlinNoise.transformation
+    (44, 3),   # Gradient.transformation
+    (45, 4),   # Checker.transformation
+    (46, 10),  # Brick.transformation
+    (47, 5),   # Tile.transformation
+    (48, 7),   # Function.transformation
+    (49, 11),  # Cellular.transformation
 })
 
 # A ColorGradientStop keeps alpha in its ``a`` channel (field 5), so every gradient node encodes it as
@@ -79,8 +91,9 @@ def build_gene_specs(nodes):
 
     ``nodes`` is the node-token list from :func:`sga.graph.parse_graph`. A spec is identified by
     its node id and its encoded key and records the range it is drawn from; its gene index is its
-    position in the returned list. A key is a scalar field number (``5``) or a repeated-field
-    ``<field_number>:<row>:<column>`` triple (``10:0:1``).
+    position in the returned list. A key is a scalar field number (``5``), a ``Matrix3x3`` entry's
+    ``<field_number>:<column>`` pair (``10:5``) or a repeated-field ``<field_number>:<row>:<column>``
+    triple (``10:0:1``).
 
     Parameters for which shader-gen declares no range are skipped and left at their encoded value,
     as are the fields in ``EXCLUDED_FIELDS`` and every gradient's alpha column.
@@ -95,6 +108,15 @@ def build_gene_specs(nodes):
             if len(parts) == 3:
                 field_number, _row, column = (int(part) for part in parts)
                 if column == ALPHA_GRADIENT_COLUMN:
+                    continue
+                found = get_range(node_type, field_number, column)
+            elif len(parts) == 2:
+                # A ``Matrix3x3`` entry, keyed ``<field number>:<column>``. A transformation field
+                # the exclusion list does not name still reaches ``get_range``, whose sub-field is
+                # the column: shader-gen declares no range for those entries, so it would be skipped
+                # there instead.
+                field_number, column = (int(part) for part in parts)
+                if (node_type, field_number) in EXCLUDED_FIELDS:
                     continue
                 found = get_range(node_type, field_number, column)
             else:

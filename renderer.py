@@ -5,19 +5,30 @@ from PIL import Image
 import os
 import sys
 
+from sga.runtime import shader_gen_py
+
+# The shader-interface contract, straight from shader-gen: the GLSL version, the attribute and
+# fragment names, the full-screen quad and the shader sources built from them. Nothing below
+# repeats those values, so this renderer cannot drift from the C++ renderers that draw the same
+# generated code.
+_contract = shader_gen_py.renderer
+
+
 def _vertex_array(ctx, program, vbo):
     """Bind the quad, skipping attributes the driver optimised away.
 
-    A generated shader that never reads FragCoord lets the compiler drop ``in_texcoord``, and
+    A generated shader that never reads FragCoord lets the compiler drop ``aFragCoord``, and
     moderngl raises when asked to bind an attribute the program does not have. The buffer is
-    still the interleaved ``x, y, u, v`` layout, so when ``in_texcoord`` is gone the binding has
+    still the interleaved ``x, y, u, v`` layout, so when ``aFragCoord`` is gone the binding has
     to pad past the missing 8 bytes instead of shrinking the stride to 8: dropping the attribute
     without the padding makes the driver read one vertex's texture coordinates as the next
     vertex, which draws a clipped, misplaced quad.
     """
-    if program.get('in_texcoord', None) is not None:
-        return ctx.vertex_array(program, [(vbo, '2f 2f', 'in_vert', 'in_texcoord')])
-    return ctx.vertex_array(program, [(vbo, '2f 8x', 'in_vert')])
+    if program.get(_contract.FRAG_COORD_ATTRIBUTE_NAME, None) is not None:
+        return ctx.vertex_array(program, [(vbo, '2f 2f',
+                                           _contract.POSITION_ATTRIBUTE_NAME,
+                                           _contract.FRAG_COORD_ATTRIBUTE_NAME)])
+    return ctx.vertex_array(program, [(vbo, '2f 8x', _contract.POSITION_ATTRIBUTE_NAME)])
 
 
 class ShaderRenderer(mglw.WindowConfig):
@@ -49,46 +60,29 @@ class ShaderRenderer(mglw.WindowConfig):
         if not self.ctx and self.wnd:
             self.ctx = self.wnd.ctx
             
-        self.quad_vertices = np.array([
-            # x, y, u, v
-            -1.0,  1.0, 0.0, 1.0,
-            -1.0, -1.0, 0.0, 0.0,
-            1.0,  1.0, 1.0, 1.0,
-            1.0, -1.0, 1.0, 0.0,
-        ], dtype='f4')
+        self.quad_vertices = np.array(_contract.quad_vertices(), dtype='f4')
 
         self.vbo = self.ctx.buffer(self.quad_vertices)
-        
-        # Shared vertex shader that provides FragCoord to the fragment shader
-        self.vert_shader = """
-            #version 330
-            in vec2 in_vert;
-            in vec2 in_texcoord;
-            out vec2 FragCoord;
-            void main() {
-                gl_Position = vec4(in_vert, 0.0, 1.0);
-                FragCoord = in_texcoord;
-            }
-        """
 
-        # Simple shader for the target image widget
-        self.image_frag = """
-            #version 330
-            out vec4 f_color;
-            in vec2 FragCoord;
-            uniform sampler2D target_image;
-            void main() {
-                f_color = texture(target_image, FragCoord);
-            }
-        """
+        # The contract's vertex shader forwards the quad's texture coordinates to FragCoord, which
+        # is what the generated shader reads. The target widget draws with the same vertex stage,
+        # so its fragment shader samples the target at that same coordinate.
+        self.vert_shader = _contract.vertex_shader_source()
+        self.image_frag = (
+            f"#version {_contract.GLSL_VERSION}\n"
+            "out vec4 f_color;\n"
+            f"in vec2 {_contract.FRAG_COORD_NAME};\n"
+            "uniform sampler2D target_image;\n"
+            "void main() {\n"
+            f"    f_color = texture(target_image, {_contract.FRAG_COORD_NAME});\n"
+            "}\n"
+        )
         
         self.shader_prog = None
         self.shader_vao = None
         self.image_prog = self.ctx.program(vertex_shader=self.vert_shader, fragment_shader=self.image_frag)
         # https://moderngl.readthedocs.io/en/5.8.2/topics/buffer_format.html#example-of-simple-usage
-        self.image_vao = self.ctx.vertex_array(self.image_prog, [
-            (self.vbo, '2f 2f', 'in_vert', 'in_texcoord')
-        ])
+        self.image_vao = _vertex_array(self.ctx, self.image_prog, self.vbo)
         
         self.target_texture = None
         self.target_pixels = None
@@ -104,10 +98,6 @@ class ShaderRenderer(mglw.WindowConfig):
 
     def update_shader(self, glsl):
         """Compiles the raw generated shader for the left widget."""
-        # Prepend version if missing
-        if not glsl.strip().startswith("#version"):
-            glsl = "#version 330\n" + glsl
-
         # The genetic algorithm recompiles this thousands of times, so drop the previous
         # program/VAO instead of letting the driver accumulate them.
         if self.shader_vao is not None:
@@ -118,23 +108,20 @@ class ShaderRenderer(mglw.WindowConfig):
             self.shader_prog = None
 
         try:
-            # We use the raw GLSL directly. The generator already provides:
-            # - in vec2 FragCoord;
-            # - uniform float uTime;
-            # - out vec4 FragColor;
-            # - void main() { ... }
-            self.shader_prog = self.ctx.program(vertex_shader=self.vert_shader, fragment_shader=glsl)
+            # The generator emits its own interface declarations, ``main()`` and every uniform it
+            # needs; the contract only prefixes the version directive the renderer expects.
+            self.shader_prog = self.ctx.program(
+                vertex_shader=self.vert_shader,
+                fragment_shader=_contract.fragment_shader_source(glsl),
+            )
             self.shader_vao = _vertex_array(self.ctx, self.shader_prog, self.vbo)
         except Exception as e:
             print(f"Failed to compile generated shader: {e}")
-            # Fallback to error shader
-            error_frag = """
-                #version 330
-                in vec2 FragCoord;
-                out vec4 FragColor;
-                void main() { FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
-            """
-            self.shader_prog = self.ctx.program(vertex_shader=self.vert_shader, fragment_shader=error_frag)
+            # Fallback to the contract's error shader.
+            self.shader_prog = self.ctx.program(
+                vertex_shader=self.vert_shader,
+                fragment_shader=_contract.error_fragment_shader_source(),
+            )
             self.shader_vao = _vertex_array(self.ctx, self.shader_prog, self.vbo)
 
     def load_target_image(self, path, size=None):
@@ -163,8 +150,8 @@ class ShaderRenderer(mglw.WindowConfig):
         """Draw the generated shader over the current viewport."""
         if not (self.shader_prog and self.shader_vao):
             return
-        if 'uTime' in self.shader_prog:
-            self.shader_prog['uTime'].value = time
+        if _contract.TIME_UNIFORM_NAME in self.shader_prog:
+            self.shader_prog[_contract.TIME_UNIFORM_NAME].value = time
         self.shader_vao.render(moderngl.TRIANGLE_STRIP)
 
     def draw_target(self, unit=0):
@@ -234,14 +221,20 @@ def create_context():
     return moderngl.create_standalone_context()
 
 
-def run_live(driver, target_image_path=None, resolution=256):
+def run_live(driver, target_image_path=None, resolution=None):
     """Show the two-widget window and let ``driver`` drive the run, one call per frame.
+
+    ``resolution`` defaults to the contract's offscreen size, so the live run scores at the same
+    size a headless one does.
 
     ``driver.advance(renderer)`` is handed this renderer on the GL thread with the window's
     context current, so a candidate can be scored offscreen and read back exactly as in a
     headless run. It returns the GLSL of the individual to display, or ``None`` once the run is
     over, after which the window keeps showing the last result until it is closed.
     """
+    if resolution is None:
+        resolution = _contract.DEFAULT_RESOLUTION
+
     ShaderRenderer.live_offscreen_size = (resolution, resolution)
     ShaderRenderer.initial_target = target_image_path
     ShaderRenderer.driver = driver

@@ -34,6 +34,7 @@
 #include <pybind11/stl.h>
 
 #include "ai-agent/utils/utils.hpp"
+#include "generator/renderer/shader_renderer.hpp"
 #include "generator/visual_shader_generator.hpp"
 
 namespace py = pybind11;
@@ -68,6 +69,13 @@ std::vector<int> get_discrete_range(const int node_type, const int field_number)
   return ai_agent_utils::get_range_for_discrete_field(node_type, field_number);
 }
 
+// `shader-gen` hands the quad back as a reference to its own static array; pybind11 casts a
+// `std::vector<float>` to a list on its own, so copy it out.
+std::vector<float> quad_vertices() {
+  const auto& vertices = shadergen_renderer::ShaderRenderer::quad_vertices();
+  return {vertices.begin(), vertices.end()};
+}
+
 }  // namespace
 
 PYBIND11_MODULE(shader_gen_py, m) {
@@ -97,4 +105,41 @@ PYBIND11_MODULE(shader_gen_py, m) {
         "shader-gen's mutation values for a discrete field.\n\n"
         "Returns an empty list when shader-gen declares no values for the (node type, field "
         "number) pair.");
+
+  // The renderer contract: the GLSL version, the interface names, the full-screen quad and the
+  // shader sources built from them. `renderer.py` reads every one of these from here instead of
+  // repeating the values, so it cannot drift from the C++ renderers that draw the same code.
+  py::module_ renderer = m.def_submodule(
+      "renderer",
+      "The shader-interface contract the generated GLSL is written against, mirroring shader-gen's "
+      "`shadergen_renderer::ShaderRenderer`.");
+
+  renderer.attr("GLSL_VERSION") = py::str(std::string(shadergen_renderer::ShaderRenderer::kGlslVersion));
+  renderer.attr("FRAG_COORD_NAME") = py::str(std::string(shadergen_renderer::ShaderRenderer::kFragCoordName));
+  renderer.attr("FRAG_COLOR_NAME") = py::str(std::string(shadergen_renderer::ShaderRenderer::kFragColorName));
+  renderer.attr("TIME_UNIFORM_NAME") = py::str(std::string(shadergen_renderer::ShaderRenderer::kTimeUniformName));
+  renderer.attr("POSITION_ATTRIBUTE_NAME") =
+      py::str(std::string(shadergen_renderer::ShaderRenderer::kPositionAttributeName));
+  renderer.attr("FRAG_COORD_ATTRIBUTE_NAME") =
+      py::str(std::string(shadergen_renderer::ShaderRenderer::kFragCoordAttributeName));
+  renderer.attr("DEFAULT_RESOLUTION") = py::int_(shadergen_renderer::ShaderRenderer::kDefaultResolution);
+  renderer.attr("QUAD_VERTEX_COUNT") = py::int_(shadergen_renderer::ShaderRenderer::kQuadVertexCount);
+
+  renderer.def("quad_vertices", &quad_vertices,
+               "The full-screen quad as interleaved (x, y, u, v), drawn as a triangle strip.");
+  renderer.def(
+      "vertex_shader_source", []() { return shadergen_renderer::ShaderRenderer::vertex_shader_source(); },
+      "The vertex shader forwarding the quad's texture coordinates to the fragment input.");
+  renderer.def(
+      "fragment_shader_source",
+      [](const std::string& code) { return shadergen_renderer::ShaderRenderer::fragment_shader_source(code); },
+      py::arg("code"), "`code` prefixed with the version directive the renderer expects.");
+  renderer.def(
+      "default_fragment_shader_source",
+      []() { return shadergen_renderer::ShaderRenderer::default_fragment_shader_source(); },
+      "The fragment shader drawn while there is no code yet.");
+  renderer.def(
+      "error_fragment_shader_source",
+      []() { return shadergen_renderer::ShaderRenderer::error_fragment_shader_source(); },
+      "The fragment shader drawn when the generated code fails to compile.");
 }
