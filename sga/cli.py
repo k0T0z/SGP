@@ -104,6 +104,20 @@ def parse_args(argv=None):
     parser.add_argument("--tournament-size", type=int, default=3, help="Tournament selection size.")
     parser.add_argument("--blend-alpha", type=float, default=0.5, help="cxBlend alpha.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
+    parser.add_argument("--spectral-seeding", action=argparse.BooleanOptionalAction, default=True,
+                        help="Screen the initial population against the target's Fourier signature "
+                             "instead of starting blind: render --spectral-oversample times "
+                             "--population random candidates, keep the ones whose spectrum is closest "
+                             "to the target's, and spread the kept set with K-means. "
+                             "--no-spectral-seeding restores the plain random start, and skips the "
+                             "screening renders.")
+    parser.add_argument("--spectral-oversample", type=float, default=3.0,
+                        help="Size of the random pool the seeding screen renders, as a multiple of "
+                             "--population. Only used with --spectral-seeding.")
+    parser.add_argument("--spectral-bins", type=int, default=32,
+                        help="Number of radial bands in the Fourier signature, i.e. the length of "
+                             "the feature vector candidates are ranked by. Only used with "
+                             "--spectral-seeding.")
     parser.add_argument("--stats", action="store_true", default=False,
                         help="Print the gene table and a probe of what crossover and mutation "
                              "do to each gene (bucket changes, overshoot, clamp rate) before "
@@ -123,6 +137,9 @@ def _print_run_info(args, specs):
           f"{sum(s['kind'] == 'discrete' for s in specs)} discrete.")
     print(f"Population: {args.population}, generations: {args.generations}, "
           f"target: {args.target} @ {args.resolution}x{args.resolution}.")
+    if getattr(args, "spectral_seeding", False):
+        print(f"Initial population: screened against the target's Fourier signature over a "
+              f"{args.spectral_oversample:g}x random pool ({args.spectral_bins} radial bands).")
     print("Fitness: mean squared error over all four channels (RGBA).")
 
 

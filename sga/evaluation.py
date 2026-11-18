@@ -79,3 +79,29 @@ class Evaluator:
             # The GA routinely produces parameter combinations whose shader fails to compile.
             return PENALTY
         return mse(image, self.target)
+
+    def score_and_render(self, individual):
+        """Render ``individual`` once and return ``(fitness, image)``.
+
+        ``image`` is the rendered top-down ``(H, W, 4)`` uint8 array, or ``None`` when the
+        candidate will not generate or compile. The score is written to the cache, so an
+        individual kept by the spectral screen (:mod:`sga.analysis`) costs nothing to re-score
+        when the run proper starts.
+        """
+        graph = self.builder(individual)
+        cached = self.cache.get(graph)
+        if cached is not None:
+            return cached, None
+        status, glsl = shader_gen_py.generate_shader(graph)
+        if not status:
+            self.cache[graph] = PENALTY
+            return PENALTY, None
+        try:
+            self.scene.update_shader(glsl)
+            image = self.scene.render_pixels()
+        except Exception:
+            self.cache[graph] = PENALTY
+            return PENALTY, None
+        fitness = mse(image, self.target)
+        self.cache[graph] = fitness
+        return fitness, image

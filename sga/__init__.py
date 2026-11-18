@@ -34,6 +34,7 @@ shader-gen declares for each (node type, field) pair.
     parameters  - shader-gen's parameter ranges and the gene <-> parameter mapping
     graph       - the encoded graph format and the fixed topology under test
     evaluation  - the fitness function
+    analysis    - the target's Fourier signature and the spectral screen that seeds the run
     operators   - the DEAP toolbox (individuals, selection, crossover, mutation)
     evolution   - the generational loop and the fitness plot
     cli         - argument parsing and the entry point

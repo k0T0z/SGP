@@ -32,6 +32,7 @@ import random
 import numpy as np
 from deap import tools
 
+from .analysis import build_initial_population
 from .operators import clamp
 
 
@@ -60,7 +61,7 @@ def run_ga_steps(toolbox, evaluate, args, on_generation=None):
     caller can persist the current best without stepping the loop itself.
     """
     random.seed(args.seed)
-    population = toolbox.population()
+    population = _initial_population(toolbox, evaluate, args)
 
     hof = tools.HallOfFame(1)
     stats = tools.Statistics(lambda ind: ind.fitness.values[0])
@@ -118,6 +119,20 @@ def run_ga_steps(toolbox, evaluate, args, on_generation=None):
         yield generation, record, hof[0]
 
     return population, logbook, hof
+
+
+def _initial_population(toolbox, evaluate, args):
+    """The starting population: target-screened when spectral seeding is on, otherwise random.
+
+    Spectral seeding (:mod:`sga.analysis`) renders an oversampled random pool and keeps the
+    candidates whose Fourier signature is closest to the target's. It is skipped when the flag is
+    off or the evaluator cannot hand back a render, which leaves the blind random start.
+    """
+    if not getattr(args, "spectral_seeding", False):
+        return toolbox.population()
+    if not hasattr(evaluate, "score_and_render"):
+        return toolbox.population()
+    return build_initial_population(toolbox, evaluate, args)
 
 
 def plot_fitness(logbook, path):
